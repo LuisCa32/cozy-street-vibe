@@ -16,7 +16,7 @@ To publish it with GitHub Pages, go to **Settings → Pages**, choose **Deploy f
 | Input | What it does |
 | --- | --- |
 | Click / tap | A gust of wind, blowing away from where you clicked. The first click also starts the music |
-| `H` (or the `⋯` button on phones) | Shows the panel: seed box, leaf count, wind strength, music volume and on/off |
+| `H`, or the sliders button in the bottom-right corner | Shows the panel: seed box, leaf count, wind strength, music volume and on/off |
 | `R` | New random street |
 | `M` | Music on / off |
 | `G` or `Space` | A gust |

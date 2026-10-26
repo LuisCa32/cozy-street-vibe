@@ -19,7 +19,7 @@
   #view { display: block; image-rendering: crisp-edges; image-rendering: pixelated; touch-action: none; cursor: pointer; }
   .hidden, [hidden] { display: none !important; }
 
-  /* Hidden control panel (toggle with H or the ⋯ button) */
+  /* Hidden control panel (toggle with H or the controls button) */
   #ui {
     position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: calc(12px + env(safe-area-inset-left, 0px)); z-index: 2;
     min-width: 250px; padding: 10px 12px; box-sizing: border-box;
@@ -35,25 +35,33 @@
     background: #1c1233; border: 1px solid #5e3a87; border-radius: 4px; padding: 3px 6px;
   }
   #ui :focus-visible { outline: 2px solid #f0a23c; outline-offset: 1px; }
-  #ui button, #uiToggle {
+  #ui button {
     font: inherit; color: #d3bde6; background: #2c1b4d; border: 1px solid #5e3a87;
     border-radius: 4px; padding: 3px 8px; cursor: pointer;
   }
   #ui button:hover { background: #43286b; }
   #ui .hint { margin: 8px 0 0; color: #a582c4; font-size: 11px; }
+  @media (pointer: coarse) { #hint { display: none; } }   /* keyboard shortcuts mean nothing on a phone */
+  /* Controls button: always findable, dims (never vanishes) when nothing is happening */
   #uiToggle {
-    position: fixed; right: calc(10px + env(safe-area-inset-right, 0px)); bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 2;
-    opacity: 0.22; background: transparent; border-color: transparent; font-size: 16px; line-height: 1;
+    position: fixed; right: calc(12px + env(safe-area-inset-right, 0px)); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 2;
+    width: 44px; height: 44px; padding: 0; display: grid; place-items: center; cursor: pointer;
+    background: rgba(15, 10, 28, 0.78); border: 1px solid #5e3a87; border-radius: 10px;
+    opacity: 0.9; transition: opacity 0.6s, border-color 0.2s, background 0.2s;
   }
-  #uiToggle:hover, #uiToggle:focus-visible { opacity: 0.9; }
+  #uiToggle svg { display: block; width: 24px; height: 24px; }
+  #uiToggle.idle { opacity: 0.4; }
+  #uiToggle:hover, #uiToggle:focus-visible, #uiToggle[aria-expanded="true"] { opacity: 1; border-color: #a582c4; background: rgba(44, 27, 77, 0.9); }
+  #uiToggle:focus-visible { outline: 2px solid #f0a23c; outline-offset: 2px; }
   #recBadge {
     position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); z-index: 2;
     padding: 3px 8px; border-radius: 4px; background: rgba(15, 10, 28, 0.86); color: #ff6b5a;
   }
   #toast {
-    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2;
+    position: fixed; left: 50%; bottom: calc(68px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 2;
+    width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center;
     padding: 5px 10px; border-radius: 4px; background: rgba(15, 10, 28, 0.86);
-    transition: opacity 0.6s; pointer-events: none; white-space: nowrap;
+    transition: opacity 0.6s; pointer-events: none;
   }
 </style>
 </head>
@@ -74,7 +82,12 @@
   <div class="row"><button id="gustBtn" title="tap / click">gust</button><button id="recBtn" title="V">record 12s</button></div>
   <p class="hint" id="hint">H hide · R random seed · M music · V record · click/tap = gust</p>
 </div>
-<button id="uiToggle" aria-label="Toggle controls">⋯</button>
+<button id="uiToggle" type="button" aria-label="Show controls" aria-expanded="false" aria-controls="ui" title="Controls (H)">
+  <svg viewBox="0 0 12 12" shape-rendering="crispEdges" aria-hidden="true">
+    <path fill="#a582c4" d="M1 2h10v1H1zM1 6h10v1H1zM1 10h10v1H1z"/>
+    <path fill="#f0a23c" d="M6 1h3v3H6zM2 5h3v3H2zM7 9h3v3H7z"/>
+  </svg>
+</button>
 <div id="recBadge" class="hidden">● REC <span id="recTime">0.0</span>s</div>
 <div id="toast" style="opacity:0"></div>
 
@@ -2042,7 +2055,7 @@ const music = {
     this.save(); this.show();
     if (!this.greeted) {
       this.greeted = true;
-      toast(`♪ ${tuneLabel(this.P)} · ${matchMedia('(pointer: coarse)').matches ? '⋯ → music to mute' : 'M to mute'}`);
+      toast(`♪ ${tuneLabel(this.P)} · ${matchMedia('(pointer: coarse)').matches ? 'mute it in the controls' : 'M to mute'}`);
     }
   },
   resume() { const pr = this.ctx.resume(); if (pr && pr.catch) pr.catch(() => {}); },
@@ -2103,7 +2116,7 @@ const $ = id => document.getElementById(id);
 const ui = {
   panel: $('ui'), seedInput: $('seedInput'), leafSlider: $('leafSlider'), leafVal: $('leafVal'),
   windSlider: $('windSlider'), windVal: $('windVal'), recBtn: $('recBtn'), recBadge: $('recBadge'),
-  recTime: $('recTime'), toast: $('toast'), musicBtn: $('musicBtn'), volSlider: $('volSlider'), musicInfo: $('musicInfo'),
+  recTime: $('recTime'), toast: $('toast'), uiToggle: $('uiToggle'), musicBtn: $('musicBtn'), volSlider: $('volSlider'), musicInfo: $('musicInfo'),
 };
 let toastTimer = 0;
 function toast(msg, ms = 3000) {
@@ -2111,7 +2124,20 @@ function toast(msg, ms = 3000) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { ui.toast.style.opacity = 0; }, ms);
 }
-const toggleUI = () => ui.panel.classList.toggle('hidden');
+function toggleUI() {
+  const open = !ui.panel.classList.toggle('hidden');
+  ui.uiToggle.setAttribute('aria-expanded', String(open));
+  ui.uiToggle.setAttribute('aria-label', open ? 'Hide controls' : 'Show controls');
+  wakeToggle();
+}
+// The controls button dims after a few quiet seconds and brightens on any touch, mouse move or key
+let idleTimer = 0;
+function wakeToggle() {
+  ui.uiToggle.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { if (ui.panel.classList.contains('hidden')) ui.uiToggle.classList.add('idle'); }, 4000);
+}
+for (const n of ['pointermove', 'pointerdown', 'keydown']) window.addEventListener(n, wakeToggle, { passive: true });
 
 function triggerGust(dir = 0) {
   startGust(simT, 1.2, dir);
@@ -2146,7 +2172,7 @@ $('seedForm').addEventListener('submit', e => {
 $('gustBtn').addEventListener('click', () => triggerGust());
 ui.recBtn.addEventListener('click', startRecording);
 ui.recBtn.hidden = !CONFIG.CAN_DOWNLOAD;
-$('uiToggle').addEventListener('click', toggleUI);
+ui.uiToggle.addEventListener('click', toggleUI);
 music.load();
 ui.volSlider.value = music.volume;
 ui.volSlider.addEventListener('input', () => music.setVolume(Number(ui.volSlider.value)));
@@ -2195,7 +2221,8 @@ function frame(now) {
 resize();
 setSeed(URL_SEED || randomSeed());
 music.show();
-toast(matchMedia('(pointer: coarse)').matches ? 'tap for a gust and music · ⋯ for controls' : 'click for a gust and music · H for controls', 4000);
+wakeToggle();
+toast(matchMedia('(pointer: coarse)').matches ? 'tap for a gust and music · controls in the corner' : 'click for a gust and music · H for controls', 4000);
 requestAnimationFrame(t => { last = t; frame(t); });
 })();
 </script>
