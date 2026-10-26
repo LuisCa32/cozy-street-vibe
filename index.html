@@ -1,0 +1,2203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#07040d">
+<meta name="description" content="A quiet autumn street at dusk — generative pixel art with falling leaves.">
+<title>Autumn Street at Dusk</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07040d; overflow: hidden; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; height: 100dvh;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #d3bde6;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #view { display: block; image-rendering: crisp-edges; image-rendering: pixelated; touch-action: none; cursor: pointer; }
+  .hidden, [hidden] { display: none !important; }
+
+  /* Hidden control panel (toggle with H or the ⋯ button) */
+  #ui {
+    position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: calc(12px + env(safe-area-inset-left, 0px)); z-index: 2;
+    min-width: 250px; padding: 10px 12px; box-sizing: border-box;
+    max-width: calc(100vw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+    background: rgba(15, 10, 28, 0.86); border: 1px solid #43286b; border-radius: 6px;
+  }
+  #ui .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  #ui label, #ui .slider-row { display: grid; grid-template-columns: 52px 1fr 36px; align-items: center; gap: 6px; margin: 6px 0; }
+  #ui .slider-row { grid-template-columns: 52px 1fr auto; }
+  #ui input[type=range] { width: 100%; min-width: 0; accent-color: #f0a23c; }
+  #seedInput {
+    flex: 1; min-width: 0; font: inherit; color: #ffd36b;
+    background: #1c1233; border: 1px solid #5e3a87; border-radius: 4px; padding: 3px 6px;
+  }
+  #ui :focus-visible { outline: 2px solid #f0a23c; outline-offset: 1px; }
+  #ui button, #uiToggle {
+    font: inherit; color: #d3bde6; background: #2c1b4d; border: 1px solid #5e3a87;
+    border-radius: 4px; padding: 3px 8px; cursor: pointer;
+  }
+  #ui button:hover { background: #43286b; }
+  #ui .hint { margin: 8px 0 0; color: #a582c4; font-size: 11px; }
+  #uiToggle {
+    position: fixed; right: calc(10px + env(safe-area-inset-right, 0px)); bottom: calc(10px + env(safe-area-inset-bottom, 0px)); z-index: 2;
+    opacity: 0.22; background: transparent; border-color: transparent; font-size: 16px; line-height: 1;
+  }
+  #uiToggle:hover, #uiToggle:focus-visible { opacity: 0.9; }
+  #recBadge {
+    position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); z-index: 2;
+    padding: 3px 8px; border-radius: 4px; background: rgba(15, 10, 28, 0.86); color: #ff6b5a;
+  }
+  #toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2;
+    padding: 5px 10px; border-radius: 4px; background: rgba(15, 10, 28, 0.86);
+    transition: opacity 0.6s; pointer-events: none; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Pixel-art autumn street at dusk with falling leaves"></canvas>
+
+<div id="ui" class="hidden">
+  <form id="seedForm" class="row" autocomplete="off">
+    <span>seed</span>
+    <input id="seedInput" type="text" spellcheck="false" maxlength="24" aria-label="Seed" title="A number or any word">
+    <button type="submit">go</button>
+    <button id="newSeedBtn" type="button" title="R">random</button>
+  </form>
+  <label>leaves <input id="leafSlider" type="range"> <span id="leafVal"></span></label>
+  <label>wind <input id="windSlider" type="range" min="0" max="2.5" step="0.05"> <span id="windVal"></span></label>
+  <div class="slider-row"><span>music</span><input id="volSlider" type="range" min="0" max="1" step="0.05" aria-label="Music volume"><button id="musicBtn" type="button" title="M" aria-pressed="false">off</button></div>
+  <p class="hint" id="musicInfo"></p>
+  <div class="row"><button id="gustBtn" title="tap / click">gust</button><button id="recBtn" title="V">record 12s</button></div>
+  <p class="hint" id="hint">H hide · R random seed · M music · V record · click/tap = gust</p>
+</div>
+<button id="uiToggle" aria-label="Toggle controls">⋯</button>
+<div id="recBadge" class="hidden">● REC <span id="recTime">0.0</span>s</div>
+<div id="toast" style="opacity:0"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ==========================================================================
+ * CONFIG — the knobs worth tweaking
+ * ======================================================================== */
+const CONFIG = {
+  // The whole piece uses these 16 colours. Every frame is snapped back onto
+  // this palette (with ordered dithering) so glows and fog stay "pixel art".
+  PALETTE: [
+    '#0f0a1c', //  0 INK      silhouettes, trunks, deepest shadow
+    '#1c1233', //  1 NIGHT    sky zenith, wet asphalt
+    '#2c1b4d', //  2 DUSK
+    '#43286b', //  3 VIOLET   near skyline
+    '#5e3a87', //  4 IRIS     far skyline, pavement
+    '#7d56a3', //  5 LILAC
+    '#a582c4', //  6 LAVENDER
+    '#d3bde6', //  7 MIST     fog, moon
+    '#3a1f3f', //  8 PLUM     house walls, warm shadow
+    '#7a3a5c', //  9 ROSE     horizon glow
+    '#b85f6e', // 10 BLUSH    warm light fall-off
+    '#a33b2c', // 11 RUST     leaves
+    '#d9662b', // 12 ORANGE   leaves
+    '#f0a23c', // 13 AMBER    leaves, lamp light
+    '#ffd36b', // 14 GOLD     lit windows
+    '#fff3c4', // 15 FLAME    lamp core
+  ],
+  LEAF_COLORS: [[11, 4], [12, 4], [13, 2], [14, 0.35]], // [palette index, weight]
+
+  // Leaves
+  LEAF_COUNT: 220,              // airborne leaves (slider range below)
+  LEAF_COUNT_MIN: 50,
+  LEAF_COUNT_MAX: 500,
+  LEAF_FALL_SPEED: [8, 14],     // terminal fall speed, buffer px / s
+  LEAF_SWAY_AMP: [4, 12],       // sideways sway velocity, px / s
+  LEAF_SWAY_FREQ: [1.0, 2.4],   // sway angular speed, rad / s
+  LEAF_FLIP_SPEED: [3, 9],      // tumble speed, rad / s
+  PILE_LIFETIME: [14, 28],      // seconds a landed leaf stays before it is gone
+  PILE_FADE: 5,                 // last N seconds of that life are a fade-out
+  PILE_MAX: 900,                // hard cap; oldest leaves fade faster beyond it
+  PILE_MAX_HEIGHT: 3,           // px a pile can build up in one spot
+
+  // Wind (px / s in buffer space)
+  WIND_BASE: 5,                 // steady breeze
+  WIND_NOISE: 7,                // smooth noise-driven variation on top
+  WIND_STRENGTH: 1,             // global multiplier (the "wind" slider)
+  GUST_INTERVAL: [9, 14],       // seconds between automatic gusts
+  GUST_DURATION: [2.2, 3.6],    // how long a gust lasts at any one spot
+  GUST_STRENGTH: [32, 55],      // peak gust speed
+  GUST_SPEED: 120,              // how fast the gust front sweeps across, px / s
+  TREE_DETACH_RATE: 0.2,        // leaves / s per leaf cluster at full gust
+  TREE_AMBIENT_RATE: 0.004,     // leaves / s per cluster in calm air
+  PILE_LIFT_RATE: 0.35,         // landed leaves re-lifted / s at full gust
+
+  // Cozy details
+  WINDOW_LIT_SHARE: 0.62,       // share of windows lit; switching on/off keeps this balance
+  SMOKE_PUFF_INTERVAL: [0.35, 0.6], // seconds between smoke puffs from each chimney
+  SMOKE_LIFE: [4.5, 7],         // seconds a smoke puff lives
+  CAT_INTERVAL: [20, 45],       // seconds between the cat's strolls along the sidewalk
+  LAMP_FLICKER_INTERVAL: [35, 70], // seconds between brief street-lamp flickers
+
+  // Scene
+  TREE_COUNT: [2, 4],
+  CAMERA_DRIFT: 4,              // px of slow side-to-side drift (shows parallax); 0 = static
+  CAMERA_PERIOD: 45,            // seconds per drift cycle
+  WINDOW_TOGGLE_RATE: 0.12,     // lights switched on or off / s across the whole street
+  QUANTIZE: true,               // snap every frame to PALETTE
+  DITHER: 26,                   // ordered-dither strength for blended pixels
+  PREWARM_SECONDS: 25,          // simulate this long before the first frame (no visible start)
+
+  // Music
+  MUSIC_VOLUME: 0.7,            // starting volume (the panel slider changes it)
+  MUSIC_TEMPO: [62, 78],        // beats per minute, picked by the seed
+
+  // Recording
+  RECORD_SECONDS: 12,
+  RECORD_FPS: 60,
+  RECORD_BITRATE: 80_000_000,   // asked for; the browser clamps to what it supports
+  CAN_DOWNLOAD: true,           // false where the host blocks downloads (hides recording)
+
+  // Buffer sizes chosen so the 1080-wide export is an exact integer upscale.
+  FORMATS: {
+    '1x1':  { w: 216, h: 216, outW: 1080, outH: 1080 }, // ×5
+    '9x16': { w: 180, h: 320, outW: 1080, outH: 1920 }, // ×6
+  },
+};
+
+// Named palette indices
+const C = { INK: 0, NIGHT: 1, DUSK: 2, VIOLET: 3, IRIS: 4, LILAC: 5, LAVENDER: 6, MIST: 7,
+            PLUM: 8, ROSE: 9, BLUSH: 10, RUST: 11, ORANGE: 12, AMBER: 13, GOLD: 14, FLAME: 15 };
+
+// Leaf underside (tumbling away from us) and lamp-lit variants of each colour
+const UNDER = CONFIG.PALETTE.map((_, i) => i);
+UNDER[C.RUST] = C.PLUM; UNDER[C.ORANGE] = C.RUST; UNDER[C.AMBER] = C.ORANGE; UNDER[C.GOLD] = C.AMBER;
+const LIT = CONFIG.PALETTE.map((_, i) => i);
+LIT[C.PLUM] = C.ROSE; LIT[C.RUST] = C.ORANGE; LIT[C.ORANGE] = C.AMBER; LIT[C.AMBER] = C.GOLD; LIT[C.GOLD] = C.FLAME;
+
+// Parallax factor per layer (1 = moves with the camera, 0 = fixed at infinity)
+const PARALLAX = { skylineA: 0.1, skylineB: 0.22, houses: 0.45, fogFar: 0.3, fogLow: 1 };
+
+/* ==========================================================================
+ * Format, layout and small helpers
+ * ======================================================================== */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+const params = new URLSearchParams(location.search);
+// The hash works too (e.g. #123, #9x16, #9x16-123) for hosts that strip the query string
+const HASH = location.hash.slice(1).split('-').filter(Boolean);
+const HASH_SEED = (() => {
+  try { return decodeURIComponent(HASH.filter(h => !/^(9x16|1x1)$/i.test(h)).join('-')); } catch (_) { return ''; }
+})();
+const RATIO = /^9[x:]16$/i.test(params.get('ratio') || '') || HASH.some(h => /^9x16$/i.test(h)) ? '9x16' : '1x1';
+const URL_SEED = params.get('seed') || HASH_SEED;
+const FMT = CONFIG.FORMATS[RATIO];
+const W = FMT.w, H = FMT.h;
+const TALL = H > W;
+const M = 8;                       // hidden margin each side of wide layers, so the camera can drift
+const COLS = W + 2 * M;            // world columns covered by the leaf-pile height map
+const BANDS = 10;                  // depth bands of the height map
+
+const LAY = (() => {
+  const sidewalkTop = Math.round(H * (TALL ? 0.72 : 0.73));
+  return {
+    sidewalkTop,                   // back edge of the sidewalk (houses stand here)
+    curbTop: sidewalkTop + 10,     // front edge of the sidewalk
+    streetTop: sidewalkTop + 13,   // gutter line; asphalt below
+    horizon: sidewalkTop - 6,      // where the sky ramp ends
+  };
+})();
+const GROUND_TOP = LAY.sidewalkTop + 2;   // landing row for the farthest leaves (z = 0)
+const GROUND_BOT = H - 2;                 // landing row for the nearest leaves  (z = 1)
+const CAT_Y = LAY.sidewalkTop + 4;        // row the cat's paws walk on (whole sprite on the pavement)
+const FOG_LOW_H = 36;                     // height of the low street-fog band
+
+const PAL = CONFIG.PALETTE;
+const PR = new Uint8Array(16), PG = new Uint8Array(16), PB = new Uint8Array(16);
+PAL.forEach((hex, i) => {
+  const n = parseInt(hex.slice(1), 16);
+  PR[i] = n >> 16; PG[i] = (n >> 8) & 255; PB[i] = n & 255;
+});
+
+// Palette packed as 32-bit RGBA words (little-endian, as every browser canvas is)
+const PAL32 = new Uint32Array(16);
+for (let i = 0; i < 16; i++) PAL32[i] = ((255 << 24) | (PB[i] << 16) | (PG[i] << 8) | PR[i]) >>> 0;
+
+// 4×4 Bayer matrix: thresholds for the sky ramp and offsets for the quantizer
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+const BAYER_T = BAYER4.map(v => (v + 0.5) / 16);
+const BAYER_OFF = new Int8Array(BAYER4.map(v => Math.round(((v + 0.5) / 16 - 0.5) * CONFIG.DITHER)));
+
+// 15-bit RGB → nearest palette index lookup table (weighted RGB distance)
+const LUT = new Uint8Array(32768);
+for (let r = 0; r < 32; r++) for (let g = 0; g < 32; g++) for (let b = 0; b < 32; b++) {
+  const R = r * 8 + 4, G = g * 8 + 4, B = b * 8 + 4;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < 16; i++) {
+    const dr = R - PR[i], dg = G - PG[i], db = B - PB[i];
+    const d = 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  LUT[(r << 10) | (g << 5) | b] = best;
+}
+
+/* ---------- seeded randomness ---------- */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashString(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+class Rand {
+  constructor(seed) { this.next = mulberry32(seed); }
+  f(a = 0, b = 1) { return a + (b - a) * this.next(); }
+  i(a, b) { return Math.floor(this.f(a, b + 1)); }          // integer in [a, b]
+  r(range) { return this.f(range[0], range[1]); }
+  chance(p) { return this.next() < p; }
+  pick(arr) { return arr[Math.floor(this.next() * arr.length)]; }
+  weighted(list) {
+    let sum = 0;
+    for (const [, w] of list) sum += w;
+    let r = this.next() * sum;
+    for (const [v, w] of list) if ((r -= w) <= 0) return v;
+    return list[list.length - 1][0];
+  }
+}
+// Smooth 1-D value noise in roughly [-1, 1]
+function makeNoise(rand) {
+  const tbl = new Float32Array(256);
+  for (let i = 0; i < 256; i++) tbl[i] = rand.f(-1, 1);
+  return x => {
+    const xf = Math.floor(x), f = x - xf, i = xf & 255, u = f * f * (3 - 2 * f);
+    return tbl[i] + (tbl[(i + 1) & 255] - tbl[i]) * u;
+  };
+}
+
+/* ---------- pixel drawing helpers (all coordinates are buffer pixels) ---------- */
+function makeLayer(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  return { c, g };
+}
+function rect(g, x, y, w, h, ci) { g.fillStyle = PAL[ci]; g.fillRect(Math.round(x), Math.round(y), w, h); }
+function px(g, x, y, ci) { g.fillStyle = PAL[ci]; g.fillRect(Math.round(x), Math.round(y), 1, 1); }
+// Bresenham line with a square brush of size `th`
+function line(g, x0, y0, x1, y1, ci, th = 1) {
+  x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  const o = Math.floor((th - 1) / 2);
+  let err = dx + dy;
+  g.fillStyle = PAL[ci];
+  for (;;) {
+    g.fillRect(x0 - o, y0 - o, th, th);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+function disc(g, cx, cy, r, ci) {
+  g.fillStyle = PAL[ci];
+  for (let dy = -r; dy <= r; dy++) {
+    const half = Math.floor(Math.sqrt(r * r - dy * dy + r * 0.8));
+    g.fillRect(cx - half, cy + dy, half * 2 + 1, 1);
+  }
+}
+
+/* ==========================================================================
+ * SCENE GENERATION — everything static is pre-rendered per seed
+ * ======================================================================== */
+
+// Sky: dithered purple → rose ramp (wide warm band at the horizon), a moon with a soft halo; stars are drawn live.
+function buildSky(rng) {
+  const { c, g } = makeLayer(W, H);
+  const img = g.createImageData(W, H), d = img.data;
+  const ramp = [C.NIGHT, C.DUSK, C.VIOLET, C.IRIS, C.ROSE, C.BLUSH];
+  for (let y = 0; y < H; y++) {
+    const te = Math.pow(clamp(y / LAY.horizon, 0, 1), 1.35) * (ramp.length - 1);
+    const i0 = Math.min(Math.floor(te), ramp.length - 1), f = te - i0;
+    for (let x = 0; x < W; x++) {
+      const ci = f > BAYER_T[((y & 3) << 2) | (x & 3)] ? ramp[Math.min(i0 + 1, ramp.length - 1)] : ramp[i0];
+      const k = (y * W + x) * 4;
+      d[k] = PR[ci]; d[k + 1] = PG[ci]; d[k + 2] = PB[ci]; d[k + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+
+  // Moon with a two-step halo (the quantizer turns the halo into dithering)
+  const mr = rng.i(4, 6);
+  const mx = Math.round(rng.f(0.15, 0.85) * W), my = Math.round(rng.f(0.12, 0.3) * LAY.horizon);
+  g.globalAlpha = 0.12; disc(g, mx, my, mr + 8, C.LAVENDER);
+  g.globalAlpha = 0.2;  disc(g, mx, my, mr + 3, C.LAVENDER);
+  g.globalAlpha = 1;    disc(g, mx, my, mr, C.MIST);
+  for (let k = 0; k < 3; k++) px(g, mx + rng.i(-mr + 2, mr - 2), my + rng.i(-mr + 2, mr - 2), C.LAVENDER);
+
+  const stars = [];
+  const count = Math.round(W * LAY.horizon / 1100);
+  for (let k = 0; k < count; k++) {
+    const x = rng.i(0, W - 1), y = rng.i(2, Math.round(LAY.horizon * 0.55));
+    if (Math.hypot(x - mx, y - my) < mr + 6) continue;
+    stars.push({ x, y, c: rng.chance(0.3) ? C.MIST : C.LAVENDER, f: rng.f(0.6, 2.4), ph: rng.f(0, TAU) });
+  }
+  return { canvas: c, stars };
+}
+
+// Distant skyline silhouettes (flat colour, a few dim windows)
+function buildSkyline(rng, color, hRange, wRange, winColor, winChance) {
+  const { c, g } = makeLayer(W + 2 * M, H);
+  g.translate(M, 0);
+  const base = LAY.sidewalkTop - 4, tall = TALL ? 1.5 : 1;
+  let x = -M - rng.i(0, 6);
+  while (x < W + M) {
+    const bw = rng.i(wRange[0], wRange[1]);
+    const bh = Math.round(rng.f(hRange[0], hRange[1]) * tall);
+    const top = base - bh;
+    rect(g, x, top, bw, bh + 12, color);
+    const r = rng.next();
+    if (r < 0.2 && bw > 6) rect(g, x + 2, top - 3, bw - 4, 3, color);              // stepped roof
+    else if (r < 0.35) rect(g, x + rng.i(1, bw - 2), top - rng.i(4, 9), 1, 10, color); // antenna
+    else if (r < 0.45 && bw > 7) {                                                  // water tower
+      rect(g, x + 2, top - 6, 5, 3, color); rect(g, x + 2, top - 3, 1, 3, color); rect(g, x + 6, top - 3, 1, 3, color);
+    }
+    for (let wy = top + 3; wy < base - 2; wy += 4)
+      for (let wx = x + 2; wx < x + bw - 1; wx += 3)
+        if (rng.chance(winChance)) px(g, wx, wy, rng.chance(0.15) ? C.AMBER : winColor);
+    x += bw + rng.i(-3, 2);
+  }
+  return c;
+}
+
+// Things glimpsed through lit windows: [chance, [[dx, dy, colour], …]] inside a 3×4 pane
+const INTERIORS = [
+  [0.12, [[0, 2, C.INK], [2, 2, C.INK], [0, 3, C.INK], [1, 3, C.INK], [2, 3, C.INK]]],          // cat on the sill
+  [0.18, [[1, 1, C.PLUM], [0, 2, C.PLUM], [1, 2, C.PLUM], [2, 2, C.PLUM], [1, 3, C.RUST]]],      // potted plant
+  [0.12, [[1, 0, C.FLAME], [0, 1, C.FLAME], [1, 1, C.FLAME], [2, 1, C.FLAME], [1, 2, C.PLUM], [1, 3, C.PLUM]]], // table lamp
+  [0.08, [[1, 1, C.PLUM], [0, 2, C.PLUM], [1, 2, C.PLUM], [2, 2, C.PLUM],
+          [0, 3, C.PLUM], [1, 3, C.PLUM], [2, 3, C.RUST]]],                                       // someone reading
+];
+function pickInterior(rng) {
+  let r = rng.next();
+  for (const [p, pixels] of INTERIORS) if ((r -= p) < 0) return pixels;
+  return null;
+}
+
+// A framed 3×4 window; the pane itself is lit live by drawWindows()
+function addWindow(g, rng, wx, wy, trim, ground, windows) {
+  rect(g, wx - 1, wy - 1, 5, 6, C.INK);         // frame
+  rect(g, wx, wy, 3, 4, C.NIGHT);               // dark pane
+  rect(g, wx - 1, wy + 5, 5, 1, trim);          // sill
+  const detail = pickInterior(rng);
+  windows.push({ x: wx, y: wy, w: 3, h: 4, ground, lit: rng.chance(CONFIG.WINDOW_LIT_SHARE),
+                 color: rng.weighted([[C.GOLD, 3], [C.AMBER, 2]]), detail,
+                 curtain: !detail && rng.chance(0.35) });
+}
+
+// Jack-o'-lantern body (5×4, sitting on `base`), drawn live on top of its own glow
+function drawPumpkin(g, x, base) {
+  px(g, x + 2, base - 4, C.INK);                // stem
+  rect(g, x + 1, base - 3, 3, 1, C.ORANGE);
+  rect(g, x, base - 2, 5, 2, C.ORANGE);
+  px(g, x, base - 1, C.RUST); px(g, x + 4, base - 1, C.RUST);
+}
+
+// Mid row of small gabled houses (plus one lit shopfront). Window panes, chimneys,
+// porch lights and pumpkins are recorded so they can glow, smoke and flicker live.
+function buildHouses(rng) {
+  const { c, g } = makeLayer(W + 2 * M, H);
+  g.translate(M, 0);
+  const base = LAY.sidewalkTop;
+  const windows = [], chimneys = [], porches = [], pumpkins = [];
+  const shopAt = rng.f(0.15, 0.6) * W;
+  let shopDone = false;
+  let x = -M - rng.i(0, 12);
+  while (x < W + M) {
+    const shop = !shopDone && x >= shopAt;
+    if (shop) shopDone = true;
+    const hw = (shop ? rng.i(15, 18) : rng.i(10, 17)) * 2 + 1;   // odd width → crisp gable peak
+    const half0 = (hw >> 1) + 1;                                  // roof half-width incl. 1px eave
+    const wallH = shop ? rng.i(25, 28) : rng.i(15, 24);
+    const roofH = Math.round(hw * (shop ? rng.f(0.3, 0.38) : rng.f(0.36, 0.5)));
+    const wall = rng.weighted([[C.PLUM, 3], [C.DUSK, 2]]);
+    const trim = wall === C.PLUM ? C.ROSE : C.VIOLET;
+    const roof = rng.pick([C.INK, C.NIGHT]);
+    const rim = roof === C.INK ? C.DUSK : C.VIOLET;              // roof edges catch the dusk sky
+    const top = base - wallH, cx = x + (hw >> 1);
+
+    // Chimney first, so the roof overlaps its foot; most of them have a fire going
+    if (rng.chance(shop ? 0.85 : 0.6)) {
+      const d = rng.i(3, Math.max(3, (hw >> 1) - 4));
+      const chx = cx + (rng.chance(0.5) ? -d : d);
+      const roofY = top - roofH + Math.max(0, Math.ceil(d * roofH / half0) - 1);
+      const chTop = roofY - rng.i(3, 6);
+      rect(g, chx - 1, chTop, 3, roofY - chTop + 2, C.INK);
+      rect(g, chx - 2, chTop, 5, 1, C.INK);
+      const every = rng.r(CONFIG.SMOKE_PUFF_INTERVAL);
+      chimneys.push({ x: chx, y: chTop - 1, smoking: rng.chance(0.8), every, acc: rng.f(0, every) });
+    }
+
+    rect(g, x, top, hw, wallH, wall);
+    rect(g, x, top, hw, 1, C.INK);                    // shadow under the eave
+    for (let r = 0; r < roofH; r++) {                 // gable roof, one row at a time
+      const half = Math.round((r + 1) / roofH * half0), y = top - roofH + r;
+      rect(g, cx - half, y, half * 2 + 1, 1, roof);
+      px(g, cx - half, y, rim); px(g, cx + half, y, rim);
+    }
+
+    // Attic window
+    if (roofH >= 9 && rng.chance(0.5)) {
+      const ay = top - Math.round(roofH * 0.5);
+      rect(g, cx - 1, ay - 1, 3, 4, C.INK);
+      rect(g, cx, ay, 1, 2, C.NIGHT);
+      windows.push({ x: cx, y: ay, w: 1, h: 2, ground: false, lit: rng.chance(CONFIG.WINDOW_LIT_SHARE),
+                     color: C.AMBER, detail: null, curtain: false });
+    }
+
+    if (shop) buildShopFront(rng, g, x, hw, top, base, trim, windows, porches);
+    else {
+      // A shrub hugging one corner (placed first so a pumpkin can keep clear of it)
+      let shrub = null;
+      if (rng.chance(0.6)) {
+        const bw = rng.i(4, 7), bh = rng.i(2, 4);
+        const bx = rng.chance(0.5) ? x - 1 : x + hw - bw + 1;
+        shrub = [bx, bx + bw - 1];
+        for (let i = 0; i < bw; i++) {
+          const h = Math.max(1, Math.round(bh * Math.sin(Math.PI * (i + 0.5) / bw)));
+          rect(g, bx + i, base - h, 1, h, C.INK);
+        }
+      }
+
+      // Window grid with a door in one ground-floor slot
+      const cols = hw >= 29 ? 3 : 2, rows = wallH >= 21 ? 2 : 1;
+      const doorCol = rng.i(0, cols - 1);
+      for (let col = 0; col < cols; col++) {
+        const wx = x + Math.round((col + 1) * hw / (cols + 1)) - 1;
+        for (let row = 0; row < rows; row++) {
+          if (row === 0 && col === doorCol) {
+            rect(g, wx, base - 7, 3, 7, C.INK);
+            rect(g, wx - 1, base - 1, 5, 1, C.VIOLET);  // step
+            px(g, wx + 2, base - 4, C.DUSK);             // knob
+            if (rng.chance(0.55)) {                      // porch light over the door
+              rect(g, wx, base - 10, 3, 1, C.INK);
+              porches.push({ x: wx + 1, y: base - 9 });
+            }
+            if (pumpkins.length < 3 && rng.chance(0.35)) {
+              // On this house's own front, clear of its shrub, and on screen (so the cap counts visible ones)
+              const fits = v => v >= x && v + 4 <= x + hw - 2 && v >= 2 && v <= W - 7 &&
+                                (!shrub || v + 4 < shrub[0] || v > shrub[1]);
+              const a = rng.chance(0.5) ? wx + 4 : wx - 6, b = a === wx + 4 ? wx - 6 : wx + 4;
+              const pkx = fits(a) ? a : fits(b) ? b : null;
+              if (pkx !== null) pumpkins.push({ x: pkx, y: base, f: 1 });
+            }
+            continue;
+          }
+          addWindow(g, rng, wx, row === 0 ? base - 11 : top + 3, trim, row === 0, windows);
+        }
+      }
+    }
+    x += hw + rng.i(1, 5);
+  }
+  for (const w of windows) w.level = w.lit ? 1 : 0;
+  return { canvas: c, windows, chimneys, porches, pumpkins };
+}
+
+// The street's one shopfront: a lit café or bookshop under a striped awning
+function buildShopFront(rng, g, x, hw, top, base, trim, windows, porches) {
+  for (let col = 0; col < 3; col++) addWindow(g, rng, x + Math.round((col + 1) * hw / 4) - 1, top + 3, trim, false, windows);
+
+  const sx = x + 3, sw = hw - 11, sy = base - 11, sh = 6, dx = x + hw - 6;
+  rect(g, sx - 1, sy - 1, sw + 2, sh + 2, C.INK);                    // window frame
+  rect(g, sx - 1, sy + sh + 1, sw + 2, base - sy - sh - 1, C.INK);   // kick plate
+  rect(g, sx - 1, sy + sh + 1, sw + 2, 1, trim);                     // sill
+  rect(g, dx, base - 9, 3, 9, C.INK);                                // door
+  rect(g, dx - 1, base - 1, 5, 1, C.VIOLET);                         // step
+  rect(g, dx, base - 12, 3, 1, C.INK);                               // lamp over the door
+  porches.push({ x: dx + 1, y: base - 11 });
+  windows.push({ x: dx + 1, y: base - 8, w: 1, h: 3, ground: true, fixed: true, lit: true,
+                 color: C.GOLD, detail: null, curtain: false });      // glass in the door
+
+  // Striped awning with a scalloped edge
+  for (let ax = sx - 2; ax <= sx + sw + 1; ax++) {
+    const k = ax - sx + 2, stripe = (k >> 1) & 1 ? C.BLUSH : C.RUST;
+    px(g, ax, base - 16, C.PLUM);
+    rect(g, ax, base - 15, 1, 2, stripe);
+    if (k % 2 === 0) px(g, ax, base - 13, stripe);
+  }
+
+  // What you see through the big window
+  const detail = [];
+  let color;
+  if (rng.chance(0.5)) {                                             // café
+    color = C.AMBER;
+    for (let lx = 2 + rng.i(0, 2); lx < sw - 1; lx += rng.i(5, 7)) detail.push([lx, 0, C.PLUM], [lx, 1, C.FLAME]); // pendant lamps
+    for (let tx = 1 + rng.i(0, 2); tx < sw - 3; tx += rng.i(6, 8)) {
+      detail.push([tx, 4, C.PLUM], [tx + 1, 4, C.PLUM], [tx + 2, 4, C.PLUM], [tx + 1, 5, C.PLUM]);   // table
+      if (rng.chance(0.5)) detail.push([tx + 1, 3, C.MIST]);                                       // a cup
+      if (rng.chance(0.75)) {                                                                      // someone sitting
+        const p = rng.chance(0.5) ? tx - 1 : tx + 3, d = p < tx ? -1 : 1;
+        detail.push([p, 2, C.PLUM], [p, 3, C.PLUM], [p + d, 3, C.PLUM], [p, 4, C.PLUM], [p, 5, C.PLUM]);
+      }
+    }
+  } else {                                                           // bookshop
+    color = C.GOLD;
+    const spines = [C.RUST, C.ORANGE, C.PLUM, C.ROSE, C.VIOLET, C.BLUSH];
+    for (const shelf of [2, 5]) {
+      for (let bx = 0; bx < sw; bx++) {
+        detail.push([bx, shelf, C.PLUM]);
+        if (rng.chance(0.65)) {
+          const col = rng.pick(spines);
+          detail.push([bx, shelf - 1, col]);
+          if (rng.chance(0.45)) detail.push([bx, shelf - 2, col]);
+        }
+      }
+    }
+    if (rng.chance(0.7)) {                                           // someone browsing
+      const p = rng.i(2, sw - 3);
+      detail.push([p, 1, C.INK], [p, 2, C.INK], [p + 1, 2, C.INK], [p, 3, C.INK], [p + 1, 3, C.INK],
+                  [p, 4, C.INK], [p, 5, C.INK], [p + 1, 5, C.INK]);
+    }
+  }
+  windows.push({ x: sx, y: sy, w: sw, h: sh, ground: true, fixed: true, lit: true, color, curtain: false,
+                 detail: detail.filter(([a, b]) => a >= 0 && a < sw && b >= 0 && b < sh) });
+}
+
+// Sidewalk, curb and wet street (static parts)
+function buildGround(rng) {
+  const { c, g } = makeLayer(W + 2 * M, H);
+  g.translate(M, 0);
+  const x0 = -M, ww = W + 2 * M, { sidewalkTop: st, curbTop: ct, streetTop: sTop } = LAY;
+
+  // Sidewalk slabs
+  rect(g, x0, st, ww, ct - st, C.IRIS);
+  rect(g, x0, st, ww, 1, C.VIOLET);
+  for (let x = x0 + rng.i(0, 11); x < W + M; x += 12) rect(g, x, st + 1, 1, ct - st - 1, C.VIOLET);
+  for (let k = 0; k < ww * 0.4; k++) px(g, rng.i(x0, W + M), rng.i(st + 1, ct - 1), rng.chance(0.5) ? C.VIOLET : C.LILAC);
+
+  // Curb
+  rect(g, x0, ct, ww, 1, C.LILAC);
+  rect(g, x0, ct + 1, ww, sTop - ct - 1, C.DUSK);
+
+  // Asphalt
+  rect(g, x0, sTop, ww, H - sTop, C.NIGHT);
+  rect(g, x0, sTop, ww, 1, C.INK);                          // gutter
+  for (let y = sTop + 1; y < sTop + 7; y++)                 // sky reflected near the curb
+    for (let x = x0; x < W + M; x++)
+      if (BAYER_T[((y & 3) << 2) | (x & 3)] < (1 - (y - sTop) / 7) * 0.55) px(g, x, y, C.DUSK);
+  for (let k = 0; k < ww * (H - sTop) * 0.035; k++) px(g, rng.i(x0, W + M), rng.i(sTop + 1, H - 1), C.DUSK);
+  for (let k = 0; k < ww * 0.12; k++) {                      // wet sheen streaks
+    const y = rng.i(sTop + 2, H - 1);
+    rect(g, rng.i(x0, W + M), y, rng.i(3, 12), 1, rng.chance(0.25) ? C.VIOLET : C.DUSK);
+  }
+  for (let k = 0; k < rng.i(2, 4); k++) {                    // puddles
+    const pxx = rng.i(0, W), pyy = rng.i(sTop + 6, H - 4), rx = rng.i(5, 11);
+    for (let dy = -1; dy <= 1; dy++) {
+      const hw = Math.round(rx * Math.sqrt(1 - (dy * dy) / 2.5));
+      rect(g, pxx - hw, pyy + dy, hw * 2 + 1, 1, dy < 0 ? C.VIOLET : C.DUSK);
+    }
+  }
+  const laneY = sTop + Math.round((H - sTop) * 0.55);         // faded centre line
+  for (let x = x0 + rng.i(0, 13); x < W + M; x += 14) rect(g, x, laneY, 7, 1, C.IRIS);
+  return c;
+}
+
+// Park bench seen from the front; `by` is the row its feet stand on
+function drawBench(g, bx, by) {
+  rect(g, bx, by - 6, 9, 1, C.INK);             // top rail
+  rect(g, bx, by - 4, 9, 1, C.INK);             // lower rail
+  rect(g, bx + 1, by - 6, 1, 4, C.INK);         // back posts
+  rect(g, bx + 7, by - 6, 1, 4, C.INK);
+  rect(g, bx - 1, by - 3, 11, 1, C.PLUM);       // seat, warmed by the lamp
+  rect(g, bx - 1, by - 2, 11, 1, C.INK);
+  rect(g, bx, by - 1, 1, 2, C.INK);             // legs
+  rect(g, bx + 8, by - 1, 1, 2, C.INK);
+}
+
+// Trees (recursive branches + leaf clusters), a bench and the street lamp
+function buildFront(rng) {
+  const { c, g } = makeLayer(W + 2 * M, H);
+  g.translate(M, 0);
+  const lampX = Math.round(rng.f(0.2, 0.8) * W);
+  const benchX = rng.chance(0.5) ? lampX + 4 : lampX - 12;   // bench spans benchX-1 … benchX+9
+  const clearL = Math.min(lampX, benchX) - 10, clearR = Math.max(lampX, benchX + 9) + 10;
+  const trees = [], clusters = [];
+
+  const count = rng.i(CONFIG.TREE_COUNT[0], CONFIG.TREE_COUNT[1]);
+  for (let i = 0; i < count; i++) {
+    let tx = Math.round((i + 0.5) / count * W + rng.f(-0.25, 0.25) * W / count);
+    if (tx > clearL && tx < clearR) {
+      // Keep the lamp and bench clear, moving to whichever edge leaves more room from the neighbours
+      const prev = trees.length ? trees[trees.length - 1].x : -Infinity;
+      const next = i + 1 < count ? (i + 1.5) / count * W : Infinity;
+      const room = e => Math.min(e - prev, next - e);
+      tx = room(clearL) >= room(clearR) ? clearL : clearR;
+      if (room(tx) < 18 && trees.length + count - i - 1 >= 2) continue;   // too cramped: skip this tree
+    }
+    const baseY = LAY.sidewalkTop + rng.i(4, 6);
+    const height = rng.f(TALL ? 0.26 : 0.3, TALL ? 0.36 : 0.42) * H;
+    trees.push(buildTree(rng, g, tx, baseY, height, lampX, clusters));
+  }
+
+  drawBench(g, benchX, LAY.sidewalkTop + 6);
+
+  // Lamp post (the glass is drawn live so it can flicker)
+  const baseY = LAY.curbTop - 1, postH = Math.round(H * (TALL ? 0.17 : 0.2)), headY = baseY - postH;
+  rect(g, lampX - 1, baseY - 3, 3, 4, C.INK);                    // foot
+  rect(g, lampX, headY + 4, 1, postH - 4, C.INK);                // post
+  rect(g, lampX - 1, baseY - Math.round(postH * 0.4), 3, 1, C.INK); // collar
+  px(g, lampX, headY - 3, C.INK);                                // finial
+  rect(g, lampX - 1, headY - 2, 3, 1, C.INK);                    // cap
+  rect(g, lampX - 2, headY - 1, 5, 1, C.INK);                    // brim
+  rect(g, lampX - 2, headY, 1, 3, C.INK); rect(g, lampX + 2, headY, 1, 3, C.INK); // frame
+  rect(g, lampX - 1, headY + 3, 3, 1, C.INK);
+  const lamp = { x: lampX, headY, baseY, glowR: TALL ? 34 : 30, poolR: TALL ? 46 : 40 };
+  return { canvas: c, trees, clusters, lamp };
+}
+
+function buildTree(rng, g, tx, baseY, height, lampX, allClusters) {
+  const clusters = [];
+  const depthMax = rng.i(5, 6);
+  const lit = lampX > tx ? 1 : -1;      // which side of the bark faces the lamp
+
+  const addCluster = (cx, cy) => {
+    const pixels = [];
+    for (let k = rng.i(3, 8); k > 0; k--) {
+      const dx = Math.round(rng.f(-2.6, 2.6)), dy = Math.round(rng.f(-2, 1.6));
+      const base = rng.weighted(CONFIG.LEAF_COLORS);
+      pixels.push([dx, dy, dy >= 1 && rng.chance(0.5) ? UNDER[base] : base, base]);
+    }
+    clusters.push({ x: Math.round(cx), y: Math.round(cy), px: pixels, group: rng.i(0, 1) });
+  };
+
+  // Recursive branching: each branch splits into 2–3 shorter, thinner children
+  const grow = (x, y, ang, len, d, th) => {
+    const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len;
+    line(g, x, y, x2, y2, C.INK, th);
+    if (th >= 2) {                      // warm rim light on the lamp side of thick limbs
+      const o = Math.floor((th - 1) / 2), hx = lit > 0 ? th - 1 - o : -o;
+      line(g, x + hx, y, x2 + hx, y2, C.PLUM, 1);
+    }
+    if (d === 0 || len < 2.5) { if (rng.chance(0.7)) addCluster(x2, y2); return; }
+    if (d <= 2 && rng.chance(0.3)) addCluster(x2, y2);
+    const n = d >= depthMax - 1 ? 2 : rng.chance(0.3) ? 3 : 2;
+    const spread = rng.f(0.3, 0.6);
+    for (let i = 0; i < n; i++) {
+      if (d <= 2 && rng.chance(0.12)) continue;          // missing twigs keep it bare-ish
+      let a = ang + (i / (n - 1) * 2 - 1) * spread + rng.f(-0.18, 0.18);
+      a += (-Math.PI / 2 - a) * 0.12;                    // gentle upward bias
+      grow(x2, y2, a, len * rng.f(0.64, 0.8), d - 1, Math.max(1, th - 1));
+    }
+  };
+
+  rect(g, tx - 3, baseY, 7, 2, C.NIGHT);                 // tree pit
+  rect(g, tx - 2, baseY - 1, 5, 2, C.INK);               // root flare
+  grow(tx, baseY, -Math.PI / 2 + rng.f(-0.12, 0.12), height * rng.f(0.3, 0.36), depthMax, 3);
+
+  // Foliage goes on two small canvases that rustle independently in the wind
+  let minX = tx, maxX = tx, minY = baseY, maxY = baseY;
+  for (const cl of clusters) {
+    minX = Math.min(minX, cl.x); maxX = Math.max(maxX, cl.x);
+    minY = Math.min(minY, cl.y); maxY = Math.max(maxY, cl.y);
+  }
+  const bx = minX - 4, by = minY - 4, bw = maxX - minX + 9, bh = maxY - minY + 9;
+  const fol = [makeLayer(bw, bh), makeLayer(bw, bh)];
+  for (const cl of clusters) {
+    const fg = fol[cl.group].g;
+    for (const [dx, dy, ci] of cl.px) px(fg, cl.x + dx - bx, cl.y + dy - by, ci);
+    allClusters.push(cl);
+  }
+  return { x: tx, topY: minY, bx, by, fol: fol.map(f => f.c), ph: rng.f(0, TAU) };
+}
+
+// Horizontally tileable fog strip built from periodic value noise
+function buildFogStrip(rng, tw, th, maxA) {
+  const { c, g } = makeLayer(tw, th);
+  const img = g.createImageData(tw, th), d = img.data;
+  const grid = (gx, gy) => {
+    const v = new Float32Array(gx * (gy + 1)).map(() => rng.next());
+    return (u, w) => {
+      const X = u * gx, Y = w * gy, xi = Math.floor(X), yi = Math.floor(Y);
+      const fx = X - xi, fy = Y - yi, sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+      const x0 = xi % gx, x1 = (xi + 1) % gx, y1 = Math.min(yi + 1, gy);
+      const a = v[yi * gx + x0], b = v[yi * gx + x1], cc = v[y1 * gx + x0], dd = v[y1 * gx + x1];
+      return (a + (b - a) * sx) * (1 - sy) + (cc + (dd - cc) * sx) * sy;
+    };
+  };
+  const n1 = grid(Math.round(tw / 26), 3), n2 = grid(Math.round(tw / 11), 6);
+  for (let y = 0; y < th; y++) {
+    const profile = Math.pow(Math.sin(Math.PI * (y + 0.5) / th), 1.4);
+    for (let x = 0; x < tw; x++) {
+      const n = 0.65 * n1(x / tw, y / th) + 0.35 * n2(x / tw, y / th);
+      const a = clamp((n - 0.3) / 0.45, 0, 1) * profile * maxA;
+      const k = (y * tw + x) * 4;
+      d[k] = PR[C.MIST]; d[k + 1] = PG[C.MIST]; d[k + 2] = PB[C.MIST]; d[k + 3] = a * 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+function buildVignette() {
+  const { c, g } = makeLayer(W, H);
+  const r0 = Math.min(W, H) * 0.6, r1 = Math.hypot(W, H) * 0.6;
+  const gr = g.createRadialGradient(W / 2, H * 0.45, r0, W / 2, H * 0.45, r1);
+  gr.addColorStop(0, 'rgba(15,10,28,0)');
+  gr.addColorStop(1, 'rgba(15,10,28,0.28)');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  return c;
+}
+
+function buildScene(seedNum) {
+  const rng = new Rand(seedNum);
+  const sky = buildSky(rng);
+  const houses = buildHouses(rng);
+  const S = {
+    sky: sky.canvas, stars: sky.stars,
+    skylineA: buildSkyline(rng, C.IRIS, [30, 66], [8, 20], C.ROSE, 0.03),
+    skylineB: buildSkyline(rng, C.VIOLET, [20, 46], [6, 16], C.BLUSH, 0.05),
+    houses: houses.canvas, windows: houses.windows, chimneys: houses.chimneys,
+    porches: houses.porches, pumpkins: houses.pumpkins,
+    ground: buildGround(rng),
+  };
+  const front = buildFront(rng);
+  Object.assign(S, { front: front.canvas, trees: front.trees, clusters: front.clusters, lamp: front.lamp });
+  S.toggleable = S.windows.filter(w => !w.fixed);
+  // No pumpkin hidden behind a trunk or the lamp post, no smoke that seems to come out of the lamp
+  S.pumpkins = S.pumpkins.filter(pk =>
+    S.trees.every(tr => Math.abs(tr.x - (pk.x + 2)) >= 7) && Math.abs(S.lamp.x - (pk.x + 2)) >= 5);
+  for (const ch of S.chimneys) if (Math.abs(ch.x - S.lamp.x) < 6) ch.smoking = false;
+  // Spots where the cat can sit without vanishing behind a trunk, the bench or the lamp post
+  const fa = front.canvas.getContext('2d').getImageData(0, CAT_Y - 4, W + 2 * M, 5).data;
+  S.catSpots = [];
+  for (let sx = Math.ceil(0.2 * W); sx <= 0.8 * W; sx++) {
+    let covered = 0, eyeRow = false;
+    for (let r = 0; r < 5; r++) for (let c = -4; c < 4; c++) {
+      if (fa[(r * (W + 2 * M) + sx + c + M) * 4 + 3] > 0) { covered++; if (r === 1) eyeRow = true; }
+    }
+    if (covered < 6 && !eyeRow) S.catSpots.push(sx);
+  }
+  S.fogFar = buildFogStrip(rng, W * 2, 28, 0.3);
+  S.fogLow = buildFogStrip(rng, W * 2, FOG_LOW_H, 0.28);
+  S.vignette = buildVignette();
+  S.windDir = rng.chance(0.5) ? 1 : -1;
+  S.noise = makeNoise(rng);
+  return S;
+}
+
+/* ==========================================================================
+ * SIMULATION STATE
+ * ======================================================================== */
+let S = null;                 // current scene
+let rt = null;                // runtime PRNG (also seeded, so a seed replays the same motion)
+let seedText = '';
+let simT = 0;
+let leaves = [], pile = [], gusts = [], puffs = [];
+const heights = new Float32Array(BANDS * COLS);   // soft pile height per depth band × column
+let nextGustAt = 0, nextFlickerAt = 0, flickerEnd = 0;
+let prewarming = false;          // true while setSeed fast-forwards the simulation (no sounds)
+let fogFarX = 0, fogLowX = 0;
+let targetLeaves = CONFIG.LEAF_COUNT;
+let windStrength = CONFIG.WIND_STRENGTH;
+const GUST_REF = CONFIG.GUST_STRENGTH[1];
+const cat = { state: 'away', timer: 0, x: 0, dir: 1, step: 0, tail: 0, sitAt: null };
+
+const camX = t => Math.min(CONFIG.CAMERA_DRIFT, M - 1) * Math.sin(t * TAU / CONFIG.CAMERA_PERIOD);
+const depthFactor = z => 0.45 + 0.55 * z;   // far leaves move less on screen (and parallax less)
+
+/* ---------- wind ---------- */
+function ambientWind(x, y, t) {
+  const n = S.noise(t * 0.11 + x * 0.006 + y * 0.003) + 0.4 * S.noise(t * 0.43 + x * 0.021 + 91.7);
+  return (S.windDir * CONFIG.WIND_BASE + n * CONFIG.WIND_NOISE) * windStrength;
+}
+// Gusts are fronts that sweep from the upwind edge across the street
+function gustAt(x, t) {
+  let s = 0;
+  for (const gu of gusts) {
+    const dist = gu.dir > 0 ? x + M + 30 : W + M + 30 - x;
+    const tau = t - gu.t0 - dist / gu.speed;
+    if (tau > 0 && tau < gu.dur) { const e = Math.sin(Math.PI * tau / gu.dur); s += gu.dir * gu.str * e * e; }
+  }
+  return s * windStrength;
+}
+const windAt = (x, y, t) => ambientWind(x, y, t) + gustAt(x, t);
+
+function startGust(t, mul = 1, dir = 0) {
+  const gu = {
+    t0: t, dir: dir || (rt.chance(0.82) ? S.windDir : -S.windDir),
+    dur: rt.r(CONFIG.GUST_DURATION), str: rt.r(CONFIG.GUST_STRENGTH) * mul,
+    speed: CONFIG.GUST_SPEED * rt.f(0.8, 1.2),
+  };
+  gusts.push(gu);
+  music.event('gust', gu);
+}
+
+function lampIntensity(t) {
+  let I = 0.94 + 0.04 * S.noise(t * 1.7 + 300);
+  if (t < flickerEnd) I *= Math.sin(t * 53) + Math.sin(t * 31.7 + 1) > 0.1 ? 1 : 0.65;
+  return I;
+}
+
+/* ---------- leaves ---------- */
+function makeLeaf() {
+  return { x: 0, y: 0, vx: 0, vy: 0, z: 0, size: 1, color: C.ORANGE, phase: 0, swayAmp: 0,
+           swayFreq: 0, fall: 0, flip: 0, flipSpeed: 0, lift: 0, landY: 0, band: 0 };
+}
+function initLeaf(p, x, y, z, color) {
+  let s = z < 0.33 ? 1 : z < 0.72 ? 2 : 3;
+  if (rt.chance(0.2)) s += rt.chance(0.5) ? 1 : -1;
+  p.z = z; p.size = clamp(s, 1, 3);
+  p.color = color ?? rt.weighted(CONFIG.LEAF_COLORS);
+  p.x = x; p.y = y;
+  p.fall = rt.r(CONFIG.LEAF_FALL_SPEED);
+  p.vx = 0; p.vy = p.fall * 0.5;
+  p.phase = rt.f(0, TAU);
+  p.swayAmp = rt.r(CONFIG.LEAF_SWAY_AMP);
+  p.swayFreq = rt.r(CONFIG.LEAF_SWAY_FREQ);
+  p.flip = rt.f(0, TAU);
+  p.flipSpeed = rt.r(CONFIG.LEAF_FLIP_SPEED);
+  p.lift = rt.f(0.3, 1);
+  p.band = Math.min(BANDS - 1, Math.floor(z * BANDS));
+  p.landY = GROUND_TOP + z * (GROUND_BOT - GROUND_TOP);
+  return p;
+}
+// A recycled leaf re-enters from the top, or from the upwind edge when it is breezy
+function respawn(p, t) {
+  const w = windAt(W * 0.5, H * 0.4, t);
+  let x, y;
+  if (Math.abs(w) > 0.6 * (CONFIG.WIND_BASE + CONFIG.WIND_NOISE) * windStrength && rt.chance(0.5)) {
+    x = w > 0 ? -M - 6 : W + M + 6; y = rt.f(-10, LAY.sidewalkTop * 0.75);
+  } else {
+    x = clamp(rt.f(-M - 10, W + M + 10) - w * 2, -M - 10, W + M + 10); y = rt.f(-24, -3);
+  }
+  initLeaf(p, x, y, rt.next());
+  p.vx = w * 0.8;
+}
+function recycle(i, t) {
+  if (leaves.length > targetLeaves) { leaves[i] = leaves[leaves.length - 1]; leaves.pop(); }
+  else respawn(leaves[i], t);
+}
+function bumpHeight(band, col, amt) {
+  const base = band * COLS;
+  for (let d = -1; d <= 1; d++) {
+    const c = col + d;
+    if (c < 0 || c >= COLS) continue;
+    heights[base + c] = clamp(heights[base + c] + amt * (d === 0 ? 1 : 0.5), 0, CONFIG.PILE_MAX_HEIGHT);
+  }
+}
+// Landed leaf → pile entry (re-anchored to the ground layer so there is no jump)
+function settleLeaf(p, cam) {
+  const x = p.x - cam * depthFactor(p.z) + cam;
+  const col = Math.round(x) + M;
+  if (col < 0 || col >= COLS) return;
+  const life = rt.r(CONFIG.PILE_LIFETIME);
+  pile.push({ x, y: Math.round(p.landY - heights[p.band * COLS + col]), z: p.z, band: p.band, col,
+              w: p.size, h: p.size === 3 ? 2 : 1, color: p.color, life, max: life, mob: rt.f(0.3, 1) });
+  bumpHeight(p.band, col, 0.3);
+}
+function spawnLeafAt(screenWorldX, y, z, color, cam) {
+  const p = initLeaf(makeLeaf(), screenWorldX - cam + cam * depthFactor(z), y, z, color);
+  leaves.push(p);
+  return p;
+}
+
+function updateLeaves(dt, t, cam) {
+  for (let i = leaves.length - 1; i >= 0; i--) {
+    const p = leaves[i];
+    const df = depthFactor(p.z);
+    const gs = gustAt(p.x, t);
+    const w = ambientWind(p.x, p.y, t) + gs;
+    const gn = Math.min(1.3, Math.abs(gs) / GUST_REF);
+
+    // Horizontal: relax toward the local wind (small leaves respond faster)
+    p.vx += (w - p.vx) * Math.min(1, dt * (1.2 + (3 - p.size) * 0.6));
+    // Vertical: gravity to terminal speed; gusts give buoyant leaves some lift
+    p.vy += (p.fall * (1 - gn * 1.5 * p.lift) - p.vy) * Math.min(1, dt * 1.6);
+    // Pendulum sway: sideways swing plus a little bob at each end of the swing
+    const ph = p.phase + t * p.swayFreq;
+    p.x += (p.vx + Math.cos(ph) * p.swayAmp) * df * dt;
+    p.y += (p.vy + Math.sin(2 * ph) * p.swayAmp * 0.35) * df * dt;
+    p.flip += dt * (p.flipSpeed + Math.abs(p.vx) * 0.12);
+    if (p.y < -30) { p.y = -30; if (p.vy < 0) p.vy = 0; }
+
+    const col = Math.round(p.x - cam * df + cam) + M;
+    const land = p.landY - (col >= 0 && col < COLS ? heights[p.band * COLS + col] : 0);
+    if (p.y >= land) { settleLeaf(p, cam); recycle(i, t); }
+    else if (p.x < -M - 14 || p.x > W + M + 14) recycle(i, t);
+  }
+}
+
+function updatePile(dt, t, cam) {
+  const over = pile.length - CONFIG.PILE_MAX;
+  const cap = targetLeaves * 1.6;
+  let j = 0;
+  for (let i = 0; i < pile.length; i++) {
+    const e = pile[i];
+    if (i < over) e.life = Math.min(e.life, 2);      // overflow: oldest leaves fade out quickly
+    e.life -= dt;
+    if (gusts.length && e.life > 0) {
+      const gs = gustAt(e.x, t), gn = Math.abs(gs) / GUST_REF;
+      if (gn > 0.25) {
+        e.x += gs * 0.1 * e.mob * dt;                  // skitter along the ground
+        if (leaves.length < cap && rt.chance(CONFIG.PILE_LIFT_RATE * gn * e.mob * dt)) {
+          const p = spawnLeafAt(e.x, e.y - 1, e.z, e.color, cam);
+          p.vy = -rt.f(12, 30); p.vx = gs * 0.6;
+          e.life = 0;
+        }
+      }
+    }
+    if (e.life <= 0) { bumpHeight(e.band, e.col, -0.3); continue; }
+    pile[j++] = e;
+  }
+  pile.length = j;
+}
+
+// Leaves let go of the trees now and then, and in bursts when a gust passes
+function updateTrees(dt, t, cam) {
+  const cap = targetLeaves * 1.6, cl = S.clusters;
+  if (!cl.length || leaves.length >= cap) return;
+  const detach = c => {
+    const [dx, dy, , base] = rt.pick(c.px);
+    const p = spawnLeafAt(c.x + dx, c.y + dy, rt.f(0.3, 0.95), base, cam);
+    p.vx = windAt(c.x, c.y, t) * 0.5; p.vy = rt.f(-4, 6);
+  };
+  if (rt.chance(cl.length * CONFIG.TREE_AMBIENT_RATE * dt)) detach(rt.pick(cl));
+  if (!gusts.length) return;
+  for (const c of cl) {
+    const gn = Math.abs(gustAt(c.x, t)) / GUST_REF;
+    if (gn > 0.2 && rt.chance(CONFIG.TREE_DETACH_RATE * gn * dt)) {
+      detach(c);
+      if (leaves.length >= cap) return;
+    }
+  }
+}
+
+function update(dt, t) {
+  const cam = camX(t);
+
+  if (t >= nextGustAt) { startGust(t); nextGustAt = t + rt.r(CONFIG.GUST_INTERVAL); }
+  gusts = gusts.filter(gu => t < gu.t0 + gu.dur + (W + 2 * M + 60) / gu.speed);
+
+  if (t >= nextFlickerAt) {
+    flickerEnd = t + rt.f(0.2, 0.45); nextFlickerAt = t + rt.r(CONFIG.LAMP_FLICKER_INTERVAL);
+    music.event('flicker', { dur: flickerEnd - t });
+  }
+
+  // Windows: rarely someone switches a light on or off
+  if (S.toggleable.length && rt.chance(CONFIG.WINDOW_TOGGLE_RATE * dt)) {
+    const lit = S.toggleable.filter(w => w.lit).length / S.toggleable.length;
+    const on = lit < CONFIG.WINDOW_LIT_SHARE;                    // drift back toward the lit share
+    const pick = S.toggleable.filter(w => w.lit !== on);
+    if (pick.length) {
+      const w = rt.pick(pick);
+      w.lit = on;
+      music.event('window', { on, x: w.x / W });
+    }
+  }
+  for (const w of S.windows) w.level = w.lit ? Math.min(1, w.level + dt * 2.5) : Math.max(0, w.level - dt * 0.8);
+
+  const wc = windAt(W / 2, LAY.horizon, t);
+  fogFarX += (S.windDir * 2 + wc * 0.12) * dt;
+  fogLowX += (S.windDir * 3.5 + wc * 0.25) * dt;
+
+  updateLeaves(dt, t, cam);
+  updatePile(dt, t, cam);
+  updateTrees(dt, t, cam);
+  updateSmoke(dt, t);
+  updateCat(dt, t);
+}
+
+/* ---------- chimney smoke ---------- */
+function updateSmoke(dt, t) {
+  for (const ch of S.chimneys) {
+    if (!ch.smoking) continue;
+    ch.acc += dt;
+    while (ch.acc >= ch.every) {
+      ch.acc -= ch.every;
+      puffs.push({ x: ch.x + rt.f(-0.4, 0.4), y: ch.y, age: 0, life: rt.r(CONFIG.SMOKE_LIFE),
+                   ph: rt.f(0, TAU), size: rt.f(0.8, 1.2) });
+    }
+  }
+  let j = 0;
+  for (const p of puffs) {
+    p.age += dt;
+    if (p.age >= p.life || p.x < -M - 12 || p.x > W + M + 12) continue;
+    // Rises and slows, leans with the wind, wavers a little
+    p.x += (windAt(p.x, p.y, t) * 0.3 + Math.sin(p.age * 1.4 + p.ph) * 1.2) * dt;
+    p.y -= (4.5 - 2.5 * p.age / p.life) * dt;
+    puffs[j++] = p;
+  }
+  puffs.length = j;
+}
+
+/* ---------- the neighbourhood cat ---------- */
+// 8×5 sprites facing right ('#' fur, 'e' eye); mirrored when walking left
+const CAT_SPRITES = {
+  walkA: ['#....#.#', '#....#e#', '.######.', '.#####..', '.#...#..'],
+  walkB: ['#....#.#', '#....#e#', '.######.', '.#####..', '..#.#...'],
+  sit:   ['....#.#.', '....#e#.', '....###.', '#..####.', '.######.'],
+  sitB:  ['....#.#.', '....#e#.', '#...###.', '#..####.', '.######.'],   // tail flick
+};
+function updateCat(dt, t) {
+  const gn = Math.min(1, Math.abs(gustAt(cat.x, t)) / GUST_REF);
+  if (cat.state === 'away') {
+    if ((cat.timer -= dt) > 0) return;
+    cat.state = 'walk';
+    cat.dir = rt.chance(0.5) ? 1 : -1;
+    cat.x = cat.dir > 0 ? -M - 10 : W + M + 10;
+    cat.sitAt = rt.chance(0.6) && S.catSpots.length ? rt.pick(S.catSpots) : null;
+    music.event('catWalk', { dir: cat.dir });
+  } else if (cat.state === 'sit') {
+    cat.tail += dt;
+    if ((cat.timer -= dt) <= 0 || gn > 0.6) cat.state = 'walk';     // a strong gust gets it moving
+  } else {
+    const speed = gn > 0.5 ? 20 : 8;                                 // trots in a gust
+    cat.x += cat.dir * speed * dt;
+    cat.step += speed * dt;
+    if (cat.sitAt !== null && (cat.dir > 0 ? cat.x >= cat.sitAt : cat.x <= cat.sitAt)) {
+      cat.state = 'sit'; cat.timer = rt.f(3, 7); cat.tail = 0; cat.sitAt = null;
+      music.event('catSit', {});
+    }
+    if (cat.x < -M - 12 || cat.x > W + M + 12) { cat.state = 'away'; cat.timer = rt.r(CONFIG.CAT_INTERVAL); }
+  }
+}
+
+/* ==========================================================================
+ * RENDERING (into the small buffer)
+ * ======================================================================== */
+const buf = document.createElement('canvas');
+buf.width = W; buf.height = H;
+const bctx = buf.getContext('2d', { willReadFrequently: true });
+bctx.imageSmoothingEnabled = false;
+
+const fogTmp = makeLayer(W, FOG_LOW_H);     // scratch canvas for tinting the low fog
+
+// Soft radial light. Each (radius, colour) is rendered once and then stamped with
+// globalAlpha, which is far cheaper than building a gradient per light per frame.
+const glowSprites = new Map();
+function glow(g, x, y, r, rgb, a) {
+  const key = r + '|' + rgb;
+  let spr = glowSprites.get(key);
+  if (!spr) {
+    const { c, g: sg } = makeLayer(r * 2, r * 2);
+    const gr = sg.createRadialGradient(r, r, 0, r, r, r);
+    gr.addColorStop(0, `rgba(${rgb},1)`);
+    gr.addColorStop(1, `rgba(${rgb},0)`);
+    sg.fillStyle = gr; sg.fillRect(0, 0, r * 2, r * 2);
+    glowSprites.set(key, spr = c);
+  }
+  g.globalAlpha = a;
+  g.drawImage(spr, Math.round(x - r), Math.round(y - r));
+  g.globalAlpha = 1;
+}
+
+function drawFog(g, strip, offset, y, alpha) {
+  const tw = strip.width;
+  const x = -Math.round(((offset % tw) + tw) % tw);
+  g.globalAlpha = alpha;
+  g.drawImage(strip, x, y); g.drawImage(strip, x + tw, y);
+  g.globalAlpha = 1;
+}
+
+function drawWindows(g, hx) {
+  for (const w of S.windows) {
+    if (w.level < 0.02) continue;
+    const x = w.x - hx;
+    if (x < -6 || x > W + 6) continue;
+    g.globalAlpha = w.level * 0.22;                     // soft spill (dithered by the quantizer)
+    g.fillStyle = PAL[C.AMBER]; g.fillRect(x - 2, w.y - 2, w.w + 4, w.h + 4);
+    g.globalAlpha = w.level;
+    g.fillStyle = PAL[w.color]; g.fillRect(x, w.y, w.w, w.h);
+    if (w.detail) {                                     // cat, plant, lamp, reader, café, books…
+      for (const [dx, dy, ci] of w.detail) { g.fillStyle = PAL[ci]; g.fillRect(x + dx, w.y + dy, 1, 1); }
+    } else if (w.w === 3) {
+      g.fillStyle = PAL[C.AMBER]; g.fillRect(x, w.y + 2, 3, 1);        // mullion
+      if (w.curtain) { g.fillStyle = PAL[C.ORANGE]; g.fillRect(x, w.y, 1, w.h); }
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+// Windows, porch lights and candle-lit jack-o'-lanterns (drawn after the ground so
+// their glow reaches the sidewalk too). The glows go down first; the fixtures and
+// pumpkins are drawn over them so the light doesn't wash them out.
+function drawHouseLights(g, t, hx) {
+  drawWindows(g, hx);
+  g.globalCompositeOperation = 'lighter';
+  for (const p of S.porches) {
+    const x = p.x - hx;
+    if (x > -8 && x < W + 8) glow(g, x + 0.5, p.y + 0.5, 4, '255,160,70', 0.55);
+  }
+  for (const p of S.pumpkins) {
+    p.f = 0.75 + 0.25 * S.noise(t * 5 + p.x * 0.37);         // candle flicker
+    const x = p.x - hx;
+    if (x > -10 && x < W + 10) glow(g, x + 2.5, p.y, 7, '255,150,60', 0.3 * p.f);
+  }
+  g.globalCompositeOperation = 'source-over';
+  for (const p of S.porches) {
+    const x = p.x - hx;
+    rect(g, x - 1, p.y - 1, 3, 1, C.INK);                       // fixture hood
+    rect(g, x - 1, p.y + 2, 3, 1, C.INK);                       // top of the door
+    px(g, x, p.y, C.GOLD);
+  }
+  for (const p of S.pumpkins) {
+    const x = p.x - hx;
+    drawPumpkin(g, x, p.y);
+    g.fillStyle = PAL[p.f > 0.88 ? C.FLAME : p.f > 0.65 ? C.GOLD : C.AMBER];
+    g.fillRect(x + 1, p.y - 2, 1, 1); g.fillRect(x + 3, p.y - 2, 1, 1); g.fillRect(x + 2, p.y - 1, 1, 1);
+  }
+}
+
+function drawSmoke(g, hx) {
+  g.fillStyle = PAL[C.MIST];
+  for (const p of puffs) {
+    const k = p.age / p.life;
+    const a = 0.42 * Math.min(1, p.age * 2.5) * Math.pow(1 - k, 1.3);
+    if (a < 0.02) continue;
+    g.globalAlpha = a;
+    g.beginPath();
+    g.arc(p.x - hx, p.y, (0.8 + k * 3.2) * p.size, 0, TAU);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+function drawCat(g, camR) {
+  if (cat.state === 'away') return;
+  const spr = cat.state === 'sit'
+    ? CAT_SPRITES[Math.floor(cat.tail * 1.5) % 4 === 3 ? 'sitB' : 'sit']
+    : CAT_SPRITES[Math.floor(cat.step / 2.5) % 2 ? 'walkB' : 'walkA'];
+  const x0 = Math.round(cat.x) - camR - 4, y0 = CAT_Y - spr.length + 1;
+  for (let r = 0; r < spr.length; r++) {
+    for (let c = 0; c < 8; c++) {
+      const ch = spr[r][c];
+      if (ch === '.') continue;
+      g.fillStyle = PAL[ch === 'e' ? C.AMBER : C.INK];
+      g.fillRect(x0 + (cat.dir > 0 ? c : 7 - c), y0 + r, 1, 1);
+    }
+  }
+}
+
+// Low fog, warmed where the lamp, lit windows and porch lights shine into it
+function drawWarmFog(g, t, I, cam, camR, hx) {
+  const ft = fogTmp.g, fy = LAY.sidewalkTop - 14;
+  ft.globalCompositeOperation = 'source-over';
+  ft.clearRect(0, 0, W, FOG_LOW_H);
+  drawFog(ft, S.fogLow, fogLowX + cam * PARALLAX.fogLow, 0, 0.8 + 0.2 * Math.sin(t * 0.17 + 1));
+  ft.globalCompositeOperation = 'source-atop';                     // tint only where there is fog
+  glow(ft, S.lamp.x - camR + 0.5, S.lamp.headY + 1.5 - fy, 46, '240,150,60', 0.75 * I);
+  for (const w of S.windows) {
+    if (!w.ground || w.level < 0.05) continue;
+    const x = w.x - hx + w.w / 2;
+    if (x > -20 && x < W + 20) glow(ft, x, w.y + w.h / 2 - fy, 8 + w.w, '255,190,100', 0.5 * w.level);
+  }
+  for (const p of S.porches) {
+    const x = p.x - hx;
+    if (x > -12 && x < W + 12) glow(ft, x + 0.5, p.y - fy, 10, '255,190,100', 0.45);
+  }
+  ft.globalCompositeOperation = 'source-over';
+  g.drawImage(fogTmp.c, 0, fy);
+}
+
+// Lamp and window light reflected on the wet street
+function drawReflections(g, t, I, camR, hx) {
+  const top = LAY.streetTop + 1, span = H - top, lx = S.lamp.x - camR;
+  g.globalCompositeOperation = 'lighter';
+  g.fillStyle = PAL[C.AMBER];
+  for (let y = top; y < H; y++) {
+    const k = (y - top) / span;
+    const rip = Math.sin(y * 1.9 - t * 2.4) + 0.7 * Math.sin(y * 0.71 + t * 1.3 + 1.7);
+    if (rip < -0.4) continue;
+    const half = 1 + Math.round(k * 2.5 + (rip > 0.9 ? 1 : 0));
+    g.globalAlpha = I * (0.45 - 0.25 * k) * (rip > 0.5 ? 1 : 0.55);
+    g.fillRect(lx - half, y, half * 2 + 1, 1);
+  }
+  g.fillStyle = PAL[C.GOLD];
+  for (const w of S.windows) {
+    if (w.level < 0.3) continue;
+    const n = Math.max(1, Math.round(w.w / 3));
+    for (let i = 0; i < n; i++) {
+      const x = w.x - hx + Math.floor((i + 0.5) * w.w / n);
+      if (x < 0 || x >= W) continue;
+      for (let k = 0; k < 7; k++) {
+        if ((k + i + Math.floor(t * 1.5 + w.x)) % 3 === 0) continue;
+        g.globalAlpha = w.level * 0.16 * (1 - k / 7);
+        g.fillRect(x, top + 1 + k * 2, 1, 1);
+      }
+    }
+  }
+
+  // Warm light spilling from ground-floor windows and porch lights onto the sidewalk.
+  // Painted over the pavement rather than added: additive amber on lilac stone stays lilac.
+  const st = LAY.sidewalkTop;
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = PAL[C.AMBER];
+  for (const w of S.windows) {
+    if (!w.ground || w.level < 0.05) continue;
+    const x = w.x - hx;
+    if (x + w.w < -8 || x > W + 8) continue;
+    for (let k = 0; k < 6; k++) {
+      const ext = Math.round(k * 0.7);
+      g.globalAlpha = w.level * 0.35 * (1 - k / 6);
+      g.fillRect(x - ext, st + 1 + k, w.w + ext * 2, 1);
+    }
+  }
+  for (const p of S.porches) {
+    const x = p.x - hx;
+    for (let k = 0; k < 4; k++) {
+      g.globalAlpha = 0.3 * (1 - k / 4);
+      g.fillRect(x - 1 - k, st + 1 + k, 3 + 2 * k, 1);
+    }
+  }
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+}
+
+function drawPile(g, camR, I) {
+  const L = S.lamp, lx = L.x - camR, r2 = (L.poolR * 0.75 * I) ** 2;
+  for (const e of pile) {
+    const x = Math.round(e.x) - camR;
+    if (x < -3 || x > W) continue;
+    let col = e.life < e.max * 0.5 ? UNDER[e.color] : e.color;   // leaves darken as they decay
+    const dx = x - lx, dy = (e.y - L.baseY) * 3;
+    if (dx * dx + dy * dy < r2) col = LIT[col];
+    g.globalAlpha = Math.min(1, e.life / CONFIG.PILE_FADE);
+    g.fillStyle = PAL[col];
+    g.fillRect(x, e.y, e.w, e.h);
+  }
+  g.globalAlpha = 1;
+}
+
+function drawLeaves(g, cam, I, front) {
+  const L = S.lamp, lx = L.x - cam, ly = L.headY + 1, r2 = (L.glowR * 0.7 * I) ** 2;
+  for (const p of leaves) {
+    if ((p.z >= 0.5) !== front) continue;
+    const sx = Math.round(p.x - cam * depthFactor(p.z)), sy = Math.round(p.y);
+    if (sx < -3 || sx > W + 2 || sy < -3) continue;
+    const c = Math.cos(p.flip);
+    let col = c < 0 ? UNDER[p.color] : p.color;            // tumbling: show the darker underside
+    const dx = sx - lx, dy = sy - ly;
+    if (dx * dx + dy * dy < r2) col = LIT[col];            // caught in the lamplight
+    // Fake rotation: width shrinks as the leaf turns edge-on
+    const w = p.size === 1 ? 1 : Math.max(1, Math.round(p.size * Math.abs(c)));
+    const h = p.size === 3 ? 2 : 1;
+    g.fillStyle = PAL[col];
+    g.fillRect(sx - (w >> 1), sy, w, h);
+  }
+}
+
+function drawFoliage(g, t, camR) {
+  for (const tr of S.trees) {
+    const w = windAt(tr.x, tr.topY, t);
+    const gn = Math.min(1, Math.abs(gustAt(tr.x, t)) / GUST_REF);
+    for (let k = 0; k < 2; k++) {
+      const sway = w / 45 + Math.sin(t * (4.5 + k * 2.1) + tr.ph + k) * (0.25 + gn * 0.9);
+      g.drawImage(tr.fol[k], tr.bx - camR + Math.round(clamp(sway, -1, 1)), tr.by);
+    }
+  }
+}
+
+function drawLamp(g, I, camR) {
+  const L = S.lamp, x = L.x - camR;
+  g.fillStyle = PAL[I > 0.7 ? C.FLAME : I > 0.45 ? C.GOLD : C.AMBER];
+  g.fillRect(x - 1, L.headY, 3, 3);
+
+  g.globalCompositeOperation = 'lighter';
+  const cx = x + 0.5, cy = L.headY + 1.5, R = L.glowR;
+  let gr = g.createRadialGradient(cx, cy, 0, cx, cy, R);
+  gr.addColorStop(0, `rgba(255,236,180,${0.85 * I})`);
+  gr.addColorStop(0.1, `rgba(255,190,100,${0.5 * I})`);
+  gr.addColorStop(0.4, `rgba(240,140,60,${0.2 * I})`);
+  gr.addColorStop(1, 'rgba(240,140,60,0)');
+  g.fillStyle = gr; g.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Pool of light on the pavement (a flattened radial gradient)
+  const P = L.poolR;
+  g.save();
+  g.translate(cx, L.baseY + 2); g.scale(1, 0.3);
+  gr = g.createRadialGradient(0, 0, 0, 0, 0, P);
+  gr.addColorStop(0, `rgba(255,190,100,${0.42 * I})`);
+  gr.addColorStop(1, 'rgba(255,170,80,0)');
+  g.fillStyle = gr; g.fillRect(-P, -P, P * 2, P * 2);
+  g.restore();
+  g.globalCompositeOperation = 'source-over';
+}
+
+// Snap every pixel to the palette; blended pixels get 4×4 ordered dithering.
+// Works on whole 32-bit pixels: this loop is the hottest code in the piece.
+function quantize() {
+  const img = bctx.getImageData(0, 0, W, H), d = new Uint32Array(img.data.buffer);
+  for (let y = 0, i = 0; y < H; y++) {
+    const row = (y & 3) << 2;
+    for (let x = 0; x < W; x++, i++) {
+      const v = d[i], r = v & 255, g = (v >>> 8) & 255, b = (v >>> 16) & 255;
+      if (PAL32[LUT[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)]] === v) continue;   // already a palette colour
+      const o = BAYER_OFF[row | (x & 3)];
+      let r2 = r + o, g2 = g + o, b2 = b + o;
+      r2 = r2 < 0 ? 0 : r2 > 255 ? 255 : r2;
+      g2 = g2 < 0 ? 0 : g2 > 255 ? 255 : g2;
+      b2 = b2 < 0 ? 0 : b2 > 255 ? 255 : b2;
+      d[i] = PAL32[LUT[((r2 >> 3) << 10) | ((g2 >> 3) << 5) | (b2 >> 3)]];
+    }
+  }
+  bctx.putImageData(img, 0, 0);
+}
+
+function render(t) {
+  const g = bctx, cam = camX(t), camR = Math.round(cam), I = lampIntensity(t);
+  const layerX = f => -M - Math.round(cam * f);
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+
+  // Sky (at infinity) and twinkling stars
+  g.drawImage(S.sky, 0, 0);
+  for (const s of S.stars) {
+    const v = Math.sin(t * s.f + s.ph);
+    if (v > -0.5) { g.fillStyle = PAL[v > 0.8 ? C.MIST : s.c]; g.fillRect(s.x, s.y, 1, 1); }
+  }
+
+  // Far → near
+  g.drawImage(S.skylineA, layerX(PARALLAX.skylineA), 0);
+  g.drawImage(S.skylineB, layerX(PARALLAX.skylineB), 0);
+  drawFog(g, S.fogFar, fogFarX + cam * PARALLAX.fogFar, LAY.horizon - 26, 0.85 + 0.15 * Math.sin(t * 0.23));
+  const hx = Math.round(cam * PARALLAX.houses);
+  g.drawImage(S.houses, -M - hx, 0);
+  drawSmoke(g, hx);
+  g.drawImage(S.ground, -M - camR, 0);
+  drawHouseLights(g, t, hx);
+  drawReflections(g, t, I, camR, hx);
+  drawPile(g, camR, I);
+  drawCat(g, camR);
+  drawLeaves(g, cam, I, false);                      // leaves behind the trees
+  g.drawImage(S.front, -M - camR, 0);
+  drawFoliage(g, t, camR);
+  drawLamp(g, I, camR);
+  drawWarmFog(g, t, I, cam, camR, hx);
+  drawLeaves(g, cam, I, true);                       // leaves in front
+  g.drawImage(S.vignette, 0, 0);
+
+  if (CONFIG.QUANTIZE) quantize();
+}
+
+/* ==========================================================================
+ * BUILD / RESEED
+ * ======================================================================== */
+function setSeed(text) {
+  seedText = String(text);
+  const num = /^\d+$/.test(seedText) ? Number(seedText) >>> 0 : hashString(seedText);
+  S = buildScene(num);
+  music.setSeed(num);
+  rt = new Rand((num ^ 0xA5A5A5A5) >>> 0);
+
+  // Reset the simulation, scatter leaves through the air, then pre-warm so the
+  // first visible frame already has drifting leaves, piles and a gust history.
+  simT = 0; gusts = []; pile = []; heights.fill(0);
+  nextGustAt = rt.r(CONFIG.GUST_INTERVAL); nextFlickerAt = rt.r(CONFIG.LAMP_FLICKER_INTERVAL) * 0.5; flickerEnd = 0;
+  puffs = []; fogFarX = 0; fogLowX = 0;
+  cat.state = 'away'; cat.timer = rt.f(3, 10); cat.sitAt = null; cat.step = 0; cat.tail = 0;
+  leaves = [];
+  for (let i = 0; i < targetLeaves; i++) {
+    const p = initLeaf(makeLeaf(), rt.f(-M, W + M), 0, rt.next());
+    p.y = rt.f(-20, p.landY - 1);
+    leaves.push(p);
+  }
+  const step = 1 / 30;
+  prewarming = true;
+  for (let k = 0; k < CONFIG.PREWARM_SECONDS / step; k++) { simT += step; update(step, simT); }
+  prewarming = false;
+
+  // Keep the address shareable, in whichever form (query or hash) the page was opened with
+  let url;
+  if (HASH.length && !params.has('seed') && !params.has('ratio')) {
+    url = `${location.pathname}${location.search}#${RATIO === '9x16' ? '9x16-' : ''}${encodeURIComponent(seedText)}`;
+  } else {
+    const q = new URLSearchParams(location.search);
+    q.set('seed', seedText);
+    if (RATIO === '9x16') q.set('ratio', '9x16'); else q.delete('ratio');
+    url = `${location.pathname}?${q}`;
+  }
+  try { history.replaceState(null, '', url); } catch (_) { /* sandboxed host */ }
+  ui.seedInput.value = seedText;
+}
+const randomSeed = () => String(Math.floor(Math.random() * 1e9));
+
+/* ==========================================================================
+ * PRESENTATION: letterboxed, crisp upscale to the screen
+ * ======================================================================== */
+const view = document.getElementById('view');
+const vctx = view.getContext('2d', { alpha: false });
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const aw = document.body.clientWidth * dpr, ah = document.body.clientHeight * dpr;
+  let s = Math.min(aw / W, ah / H);
+  if (s >= 1) { const si = Math.floor(s); if (si / s >= 0.8) s = si; } // prefer whole-pixel scaling
+  view.width = Math.max(1, Math.round(W * s));
+  view.height = Math.max(1, Math.round(H * s));
+  view.style.width = view.width / dpr + 'px';
+  view.style.height = view.height / dpr + 'px';
+  vctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+
+/* ==========================================================================
+ * RECORDING (V): 12 s nearest-neighbour upscaled clip via MediaRecorder
+ * ======================================================================== */
+let rec = null;
+function startRecording() {
+  if (rec) return;
+  if (!CONFIG.CAN_DOWNLOAD) { toast('Recording needs the standalone index.html (downloads are blocked here)'); return; }
+  if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
+    toast('Recording is not supported in this browser'); return;
+  }
+  const rc = document.createElement('canvas');
+  rc.width = FMT.outW; rc.height = FMT.outH;
+  const rctx = rc.getContext('2d', { alpha: false });
+  rctx.imageSmoothingEnabled = false;
+  rctx.drawImage(buf, 0, 0, rc.width, rc.height);
+
+  const video = rc.captureStream(CONFIG.RECORD_FPS);
+  const audio = music.running && music.recDest ? music.recDest.stream.getAudioTracks() : [];   // what you hear
+  const stream = new MediaStream([...video.getVideoTracks(), ...audio]);
+  const types = audio.length
+    ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+    : ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4'];
+  const mimeType = types.find(tp => MediaRecorder.isTypeSupported(tp)) || '';
+  let mr;
+  try {
+    mr = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: CONFIG.RECORD_BITRATE });
+  } catch (err) {
+    toast('Could not start recording: ' + err.message); return;
+  }
+  const chunks = [];
+  mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  mr.onstop = async () => {
+    video.getTracks().forEach(tr => tr.stop());            // the music's audio track stays alive for next time
+    const type = mr.mimeType || mimeType || 'video/webm';
+    let blob = new Blob(chunks, { type });
+    if (type.includes('webm')) {
+      const parts = withWebmDuration(await blob.arrayBuffer(), rec.duration || CONFIG.RECORD_SECONDS * 1000);
+      if (parts) blob = new Blob(parts, { type });
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `autumn-street-${seedText}-${RATIO}.${type.includes('mp4') ? 'mp4' : 'webm'}`;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    toast('Saved ' + a.download);
+    rec = null;
+    if (music.ctx && !music.running) music.ctx.suspend();   // muted during the recording: sleep now
+    ui.recBadge.classList.add('hidden');
+    ui.recBtn.disabled = false;
+  };
+  mr.start(250);
+  rec = { mr, rc, rctx, start: performance.now() };
+  ui.recBadge.classList.remove('hidden');
+  ui.recBtn.disabled = true;
+}
+// MediaRecorder writes WebM without a duration, so many players can't show its length or
+// seek. Insert Segment ▸ Info ▸ Duration. Returns Blob parts, or null to keep the file as is.
+function withWebmDuration(bytes, ms) {
+  const b = new Uint8Array(bytes);
+  const id = i => {
+    let len = 1, m = 0x80;
+    while (len < 5 && !(b[i] & m)) { len++; m >>= 1; }
+    let v = 0;
+    for (let k = 0; k < len; k++) v = v * 256 + b[i + k];
+    return [v, len];
+  };
+  const size = i => {
+    let len = 1, m = 0x80;
+    while (len < 9 && !(b[i] & m)) { len++; m >>= 1; }
+    let v = b[i] & (m - 1), unknown = v === m - 1;
+    for (let k = 1; k < len; k++) { v = v * 256 + b[i + k]; unknown = unknown && b[i + k] === 255; }
+    return [unknown ? -1 : v, len];
+  };
+  const encSize = (v, len) => {
+    if (v >= 2 ** (7 * len) - 1) return null;
+    const out = new Uint8Array(len);
+    for (let k = len - 1; k >= 0; k--) { out[k] = v % 256; v = Math.floor(v / 256); }
+    out[0] |= 0x80 >> (len - 1);
+    return out;
+  };
+  try {
+    const [ebml, el] = id(0), [ebmlSize, esl] = size(el);
+    if (ebml !== 0x1A45DFA3) return null;
+    const segAt = el + esl + ebmlSize, [seg, sl] = id(segAt), [segSize, ssl] = size(segAt + sl);
+    if (seg !== 0x18538067) return null;
+    for (let i = segAt + sl + ssl; i < b.length;) {
+      const [eid, eidl] = id(i), [esz, eszl] = size(i + eidl);
+      if (eid === 0x114D9B74 || esz < 0) return null;            // a SeekHead's offsets would go stale
+      if (eid !== 0x1549A966) { i += eidl + eszl + esz; continue; }
+      const body = i + eidl + eszl, end = body + esz;
+      let scale = 1e6;                                           // TimecodeScale, ns per tick
+      for (let j = body; j < end;) {
+        const [cid, cl] = id(j), [cs, csl] = size(j + cl);
+        if (cid === 0x4489) return null;                         // already has a duration
+        if (cid === 0x2AD7B1) { scale = 0; for (let k = 0; k < cs; k++) scale = scale * 256 + b[j + cl + csl + k]; }
+        j += cl + csl + cs;
+      }
+      const dur = new Uint8Array(11);
+      dur.set([0x44, 0x89, 0x88]);
+      new DataView(dur.buffer).setFloat64(3, ms * 1e6 / scale);
+      const infoSize = encSize(esz + 11, eszl);
+      const newSeg = segSize < 0 ? b.subarray(segAt + sl, segAt + sl + ssl) : encSize(segSize + 11, ssl);
+      if (!infoSize || !newSeg) return null;
+      return [b.subarray(0, segAt + sl), newSeg, b.subarray(segAt + sl + ssl, i + eidl), infoSize,
+              b.subarray(body, end), dur, b.subarray(end)];
+    }
+  } catch (_) { /* unexpected layout: keep the original file */ }
+  return null;
+}
+
+function recordFrame(now) {
+  rec.rctx.drawImage(buf, 0, 0, rec.rc.width, rec.rc.height);
+  const el = (now - rec.start) / 1000;
+  ui.recTime.textContent = Math.min(el, CONFIG.RECORD_SECONDS).toFixed(1);
+  if (el >= CONFIG.RECORD_SECONDS && rec.mr.state === 'recording') { rec.duration = now - rec.start; rec.mr.stop(); }
+}
+
+/* ==========================================================================
+ * MUSIC — a seeded lo-fi jazz trio (electric piano, upright bass, brushes,
+ * vibraphone), synthesized with Web Audio. No samples, no files.
+ * ======================================================================== */
+const NOTE_NAMES = ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B'];
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+
+// Chord qualities as semitones above the chord root
+const QUALITY = {
+  maj7: [0, 4, 7, 11], maj9: [0, 4, 7, 11, 14], '6/9': [0, 4, 7, 9, 14], m7: [0, 3, 7, 10], m9: [0, 3, 7, 10, 14],
+  m6: [0, 3, 7, 9], 7: [0, 4, 7, 10], 9: [0, 4, 7, 10, 14], 13: [0, 4, 10, 14, 21], '7b9': [0, 4, 7, 10, 13], m7b5: [0, 3, 6, 10],
+};
+// Chord progressions, one [semitones above the key, quality] per bar
+const PROGRESSIONS = [
+  { bars: [[2, 'm9'], [7, '13'], [0, 'maj9'], [9, '7b9']] },                       // ii V I VI
+  { bars: [[0, 'maj7'], [9, 'm9'], [2, 'm9'], [7, '13']] },                        // I vi ii V
+  { bars: [[5, 'maj7'], [4, 'm7'], [2, 'm9'], [0, 'maj9']] },                      // IV iii ii I
+  { bars: [[0, 'maj9'], [0, '6/9'], [5, 'm6'], [10, '9']] },                       // I, minor iv, ♭VII
+  { minor: true, bars: [[2, 'm9'], [7, '9'], [0, 'maj7'], [5, 'maj7'], [11, 'm7b5'], [4, '7b9'], [9, 'm9'], [9, 'm9']] },   // round the circle
+  { bars: [[0, 'maj9'], [5, 'maj7'], [4, 'm7'], [9, '7b9'], [2, 'm9'], [7, '9'], [0, 'maj7'], [7, '13']] },
+  { minor: true, bars: [[9, 'm9'], [5, 'maj7'], [11, 'm7b5'], [4, '7b9']] },     // i ♭VI iiø V in the relative minor
+];
+const KEYS = [0, 1, 3, 5, 7, 8, 10];                 // C D♭ E♭ F G A♭ B♭: warm, piano-friendly keys
+// Piano comping rhythms: [beat, length in beats, velocity]
+const COMPING = [
+  [[0, 3.8, 1]],                                     // one long chord
+  [[0, 1.3, 1], [1.5, 2.3, 0.8]],                    // Charleston
+  [[0, 1.8, 1], [2, 1.8, 0.85]],                     // two to the bar
+  [[0, 2.4, 1], [3, 0.8, 0.7]],                      // a nudge on beat four
+  [[0.5, 1.8, 0.9], [2.5, 1.4, 0.75]],               // laid back, on the offbeats
+];
+// Melody rhythm cells: [eighth-note slot 0-7, length in eighths]
+const CELLS = [
+  [[0, 2], [3, 1], [4, 3]], [[1, 1], [2, 1], [4, 2], [6, 2]], [[0, 3], [3, 1], [4, 1], [5, 3]],
+  [[2, 1], [3, 1], [4, 4]], [[0, 1], [1, 1], [2, 2], [5, 3]], [[1, 2], [3, 2], [5, 1], [6, 2]],
+];
+const STEPS = [[1, 3], [-1, 3], [2, 1.5], [-2, 1.5], [3, 0.6], [-3, 0.6], [0, 0.6]];   // melodic moves, in scale steps
+const MAJOR = [0, 2, 4, 5, 7, 9, 11], PENTATONIC = [0, 2, 4, 7, 9];
+
+// Everything the seed decides about the music
+function makeTune(seedNum) {
+  const r = new Rand((seedNum ^ 0x6A09E667) >>> 0);
+  const keyPc = r.pick(KEYS), prog = r.pick(PROGRESSIONS);
+  return {
+    keyPc, minor: !!prog.minor, prog: prog.bars,
+    bpm: Math.round(r.r(CONFIG.MUSIC_TEMPO)), swing: r.f(0.58, 0.66),
+    comp: [r.pick(COMPING), r.pick(COMPING)], walk: r.chance(0.3), ride: r.chance(0.5),
+    tremolo: r.chance(0.6), melody: r.f(0.55, 0.85), bright: r.f(0.85, 1.15), crackle: r.f(0.5, 1),
+    seed: r.i(1, 2147483646),
+  };
+}
+const tuneLabel = P => `${P.minor ? NOTE_NAMES[(P.keyPc + 9) % 12] + ' minor' : NOTE_NAMES[P.keyPc] + ' major'} · ${P.bpm} bpm`;
+
+// Writes the tune bar by bar, forever. Deterministic: the same tune always yields the same
+// bars, whether it is played live or rendered offline.
+function makeComposer(P) {
+  const r = new Rand(P.seed), L = P.prog.length, scale = MAJOR.map(i => (P.keyPc + i) % 12);
+  let bar = 0, cycle = -1, breakdown = false, melodyOn = false, voiced = null, motif = null, mel = 76;
+  const chordAt = i => {
+    const [deg, q] = P.prog[i % L], root = (P.keyPc + deg) % 12;
+    return { root, ivs: QUALITY[q], pcs: QUALITY[q].map(iv => (root + iv) % 12) };
+  };
+  const bassMidi = pc => (36 + pc > 43 ? 24 + pc : 36 + pc);
+  const nearest = (list, m) => list.reduce((a, b) => (Math.abs(b - m) < Math.abs(a - m) ? b : a));
+
+  // Rootless piano voicing (3rd, 7th and colour tones), voice-led from the previous chord
+  function voice(ch) {
+    const ivs = [...new Set(ch.ivs.map(iv => iv % 12).filter(iv => iv !== 0))].sort((a, b) => a - b);
+    if (ivs.length < 4 && !ivs.includes(2)) ivs.push(2);
+    const pcs = ivs.map(iv => (ch.root + iv) % 12);
+    let best = null, cost = Infinity;
+    for (let rot = 0; rot < pcs.length; rot++) {
+      const order = pcs.slice(rot).concat(pcs.slice(0, rot));
+      for (let lo = 50; lo <= 61; lo++) {
+        if (lo % 12 !== order[0]) continue;
+        const v = [lo];
+        for (const pc of order.slice(1)) { let n = v[v.length - 1] + 1; while (n % 12 !== pc) n++; v.push(n); }
+        if (v[v.length - 1] > 77 || (v[1] - v[0] === 1 && v[0] < 53)) continue;   // too high, or muddy at the bottom
+        const c = voiced ? v.reduce((s, n, k) => s + Math.abs(n - voiced[Math.min(k, voiced.length - 1)]), 0) : Math.abs(v[0] - 55) * 2;
+        if (c < cost) { cost = c; best = v; }
+      }
+    }
+    return best || pcs.map(pc => 55 + ((pc - 55 % 12 + 12) % 12)).sort((a, b) => a - b);
+  }
+  // Notes the melody may use over a chord: the key's scale plus chord tones, minus clashes
+  function melodyNotes(ch) {
+    const pcs = new Set([...scale, ...ch.pcs]);
+    for (const pc of [...pcs]) if (!ch.pcs.includes(pc) && ch.pcs.includes((pc + 11) % 12)) pcs.delete(pc);
+    if (ch.ivs.includes(3) && ch.ivs.includes(7) && !ch.pcs.includes((ch.root + 6) % 12)) pcs.delete((ch.root + 6) % 12);
+    const out = [];
+    for (let m = 64; m <= 88; m++) if (pcs.has(m % 12)) out.push(m);
+    return out;
+  }
+
+  return {
+    nextBar() {
+      const i = bar % L;
+      if (i === 0) {                                 // a new chorus
+        cycle++;
+        breakdown = cycle % 5 === 4;                 // every fifth chorus drops the drums
+        melodyOn = cycle > 0 && r.chance(P.melody);
+      }
+      if (cycle === 0 && i === 4) melodyOn = r.chance(P.melody);   // a long first chorus gets a tune halfway
+      const drums = bar >= 2 && !breakdown;          // two bars of piano and bass to begin with
+      const ch = chordAt(bar), next = chordAt(bar + 1), notes = [];
+
+      // Electric piano, each chord gently rolled
+      voiced = voice(ch);
+      for (const [b, len, vel] of P.comp[(bar >> 1) & 1]) {
+        voiced.forEach((m, k) => notes.push({ inst: 'ep', beat: b, len, midi: m, vel: vel * r.f(0.75, 1), roll: k * 0.011 }));
+      }
+
+      // Bass: two-feel or walking, leaning into the next chord
+      const root = bassMidi(ch.root), fi = ch.ivs.includes(6) ? 6 : 7;       // ♭5 on half-diminished chords
+      const fifth = nearest([root + fi, root + fi - 12].filter(m => m >= 28 && m <= 47), bassMidi(next.root));
+      const approach = bassMidi(next.root) + (r.chance(0.5) ? 1 : -1);
+      if (P.walk && drums) {
+        const third = root + (ch.ivs.includes(3) ? 3 : 4), b2 = r.chance(0.5) ? third : fifth, c3 = r.chance(0.5) ? fifth : root + 12;
+        // re-pick beat 3 if it would leap into the approach note
+        const alt = [fifth, fifth + 12, fifth - 12, third, root + 12].filter(m => m >= 28 && m <= 50 && m !== b2 && m !== approach);
+        const b3 = Math.abs(c3 - approach) <= 9 || !alt.length ? c3 : nearest(alt, approach);
+        [root, b2, b3, approach].forEach((m, b) => notes.push({ inst: 'bass', beat: b, len: 0.92, midi: m, vel: b ? 0.8 : 1 }));
+      } else {
+        const push = r.chance(0.4);
+        notes.push({ inst: 'bass', beat: 0, len: 1.9, midi: root, vel: 1 });
+        notes.push({ inst: 'bass', beat: 2, len: push ? 1.4 : 1.9, midi: fifth, vel: 0.85 });
+        if (push) notes.push({ inst: 'bass', beat: 3.5, len: 0.45, midi: approach, vel: 0.7 });
+      }
+
+      // Brushes: sweeps, backbeat slaps, ghost taps, a felt kick, maybe a ride
+      if (drums) {
+        notes.push({ inst: 'swish', beat: 0, len: 1.9, vel: r.f(0.7, 1) }, { inst: 'swish', beat: 2, len: 1.9, vel: r.f(0.7, 1) });
+        notes.push({ inst: 'slap', beat: 1, vel: r.f(0.75, 1) }, { inst: 'slap', beat: 3, vel: r.f(0.75, 1) });
+        for (const b of [0.5, 1.5, 2.5, 3.5]) if (r.chance(0.3)) notes.push({ inst: 'ghost', beat: b, vel: r.f(0.5, 1) });
+        notes.push({ inst: 'kick', beat: 0, vel: 1 });
+        if (r.chance(0.35)) notes.push({ inst: 'kick', beat: 2.5, vel: 0.55 });
+        if (P.ride) for (const [b, v] of [[0, 0.8], [1, 1], [1.5, 0.55], [2, 0.8], [3, 1], [3.5, 0.55]]) {
+          notes.push({ inst: 'ride', beat: b, vel: v * r.f(0.8, 1) });
+        }
+      }
+
+      // Vibraphone melody in four-bar phrases: a motif, its answer, the motif again, a long note
+      if (melodyOn) {
+        const pb = i % 4, pool = melodyNotes(ch), tones = pool.filter(m => ch.pcs.includes(m % 12));
+        if (pb === 0 || !motif) motif = { cell: r.pick(CELLS), steps: Array.from({ length: 5 }, () => r.weighted(STEPS)) };
+        if (pb < 3) {
+          if (!(pb === 1 && r.chance(0.4))) {        // the answer is sometimes a rest
+            let idx = clamp(pool.indexOf(nearest(pool, mel)) + (motif.steps[3] < 0 ? -1 : 1) * (pb === 1 ? -1 : 1), 0, pool.length - 1);
+            motif.cell.forEach(([slot, len], k) => {
+              if (k) idx = clamp(idx + motif.steps[(k - 1) % motif.steps.length] * (pb === 1 ? -1 : 1), 0, pool.length - 1);
+              let m = pool[idx];
+              if (slot % 4 === 0 || k === motif.cell.length - 1) { m = nearest(tones, m); idx = pool.indexOf(m); }
+              notes.push({ inst: 'vibes', beat: slot / 2, len: len / 2, midi: m, vel: r.f(0.6, 0.9) });
+              mel = m;
+            });
+          }
+        } else {
+          const colour = tones.filter(m => [2, 3, 4].includes((m - ch.root + 120) % 12));
+          mel = nearest(colour.length ? colour : tones, mel);
+          notes.push({ inst: 'vibes', beat: 0, len: 2.6, midi: mel, vel: 0.75 });
+        }
+        if (mel > 84) mel -= 7; else if (mel < 70) mel += 7;
+      }
+      bar++;
+      return { chord: ch, next, notes };
+    },
+  };
+}
+
+// Shared sound sources, generated (deterministically) rather than loaded
+function makeWhite(ctx) {
+  const r = new Rand(7), b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = r.f(-1, 1);
+  return b;
+}
+function makeImpulse(ctx) {                          // a small, dark room
+  const r = new Rand(11), sr = ctx.sampleRate, len = Math.floor(sr * 2.6), b = ctx.createBuffer(2, len, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = b.getChannelData(c);
+    let lp = 0;
+    for (let i = Math.floor(sr * 0.012); i < len; i++) {
+      const t = i / sr;
+      lp += (r.f(-1, 1) - lp) * (0.18 + 0.5 * Math.exp(-t * 3));
+      d[i] = lp * Math.exp(-t / 0.6);
+    }
+  }
+  return b;
+}
+function makeCrackle(ctx, seed) {                    // vinyl hiss and pops
+  const r = new Rand(seed ^ 0x9E3779B9), sr = ctx.sampleRate, len = sr * 6, b = ctx.createBuffer(2, len, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = b.getChannelData(c);
+    let hiss = 0, pop = 0;
+    for (let i = 0; i < len; i++) {
+      hiss += (r.f(-1, 1) - hiss) * 0.08;
+      if (r.next() < 0.00025) pop = r.f(0.02, 0.1) * (r.chance(0.5) ? 1 : -1);
+      d[i] = hiss * 0.004 + pop;
+      pop *= 0.8;
+    }
+  }
+  return b;
+}
+
+// The instruments and mixing desk for one AudioContext (live or offline):
+// tunes → tone (lamp-flicker muffle) → tape wow → compressor → master volume
+class Band {
+  constructor(ctx, out) {
+    this.ctx = ctx;
+    const c = ctx;
+    this.master = this.g(0);
+    this.master.connect(out);
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.knee.value = 12; comp.ratio.value = 2.5; comp.attack.value = 0.02; comp.release.value = 0.3;
+    comp.connect(this.master);
+    this.wow = c.createDelay(0.05);                  // tape wow and flutter: a gently wobbling delay
+    this.wow.delayTime.value = 0.012;
+    this.lfo(0.42, 0.0011).connect(this.wow.delayTime);
+    this.lfo(3.1, 0.00012).connect(this.wow.delayTime);
+    this.wow.connect(comp);
+    this.tone = c.createBiquadFilter();
+    this.tone.type = 'lowpass'; this.tone.Q.value = 0.4; this.tone.frequency.value = 7000;
+    this.tone.connect(this.wow);
+    const lowCut = c.createBiquadFilter();          // also removes the DC that FM synthesis leaves behind
+    lowCut.type = 'highpass'; lowCut.frequency.value = 35; lowCut.Q.value = 0.7;
+    lowCut.connect(this.tone);
+    this.bus = this.g(0.6); this.bus.connect(lowCut);
+    this.verb = c.createConvolver(); this.verb.buffer = makeImpulse(c); this.verb.connect(lowCut);
+    this.white = makeWhite(c);
+    this.bars = [];
+    this.T = null;
+  }
+  g(v = 1) { const n = this.ctx.createGain(); n.gain.value = v; return n; }
+  panner() { return this.ctx.createStereoPanner ? this.ctx.createStereoPanner() : this.g(1); }   // old Safari: centred
+  lfo(rate, depth) {
+    const o = this.ctx.createOscillator(), d = this.g(depth);
+    o.frequency.value = rate; o.connect(d); o.start();
+    return d;
+  }
+  noise(t, dur) {
+    const s = this.ctx.createBufferSource();
+    s.buffer = this.white; s.loop = true;
+    s.start(t, (t * 7.31) % 1.9); s.stop(t + dur);
+    return s;
+  }
+
+  // Swap in a new tune; the old one fades out under it
+  newTune(P) {
+    const c = this.ctx, t = c.currentTime;
+    if (this.T) {
+      const old = this.T;
+      old.dry.gain.setTargetAtTime(0, t, 0.25); old.wet.gain.setTargetAtTime(0, t, 0.25);
+      setTimeout(() => { old.dry.disconnect(); old.wet.disconnect(); old.stop.forEach(n => n.stop()); }, 2500);
+    }
+    const T = { dry: this.g(), wet: this.g(), stop: [] };
+    T.dry.connect(this.bus); T.wet.connect(this.verb);
+    const inst = (send) => { const n = this.g(); n.connect(T.dry); const s = this.g(send); n.connect(s); s.connect(T.wet); return n; };
+    T.ep = inst(0.3); T.bass = inst(0.08); T.drums = inst(0.12); T.vibes = inst(0.45);
+    T.fx = inst(0.35); T.fx.gain.value = 0.9;        // scene accents fade out with their tune
+    if (P.ride) {                                    // one ride-cymbal bank per tune, struck by envelope
+      const bp = c.createBiquadFilter(), hp = c.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 7800; bp.Q.value = 0.6; hp.type = 'highpass'; hp.frequency.value = 5200;
+      T.ride = this.g(0); bp.connect(hp); hp.connect(T.ride); T.ride.connect(T.drums);
+      for (const k of [2, 3, 4.16, 5.43, 6.79, 8.21]) {
+        const o = c.createOscillator(); o.type = 'square'; o.frequency.value = 330 * k; o.connect(bp); o.start(t); T.stop.push(o);
+      }
+    }
+    const wobble = (node, rate, depth) => {
+      const o = c.createOscillator(), d = this.g(depth);
+      o.frequency.value = rate; o.connect(d); d.connect(node.gain); o.start(t); T.stop.push(o);
+    };
+    if (P.tremolo) wobble(T.ep, 4.6, 0.2);           // suitcase tremolo on the electric piano
+    wobble(T.vibes, 5.4, 0.12);                      // the vibraphone's motor
+    const cr = c.createBufferSource(), crg = this.g(0.35 * P.crackle);
+    cr.buffer = makeCrackle(c, P.seed); cr.loop = true; cr.connect(crg); crg.connect(T.dry); cr.start(t); T.stop.push(cr);
+    this.T = T; this.P = P; this.spb = 60 / P.bpm;
+    this.hr = new Rand(P.seed ^ 0x2545F491);         // humanised timing
+    this.ar = new Rand(P.seed ^ 0x1B873593);         // choices for scene accents
+    this.tone.frequency.setValueAtTime(7000 * P.bright, t);
+    this.bars = [];
+  }
+
+  playBar(bar, start) {
+    const T = this.T, spb = this.spb, sw = this.P.swing;
+    const at = b => { const w = Math.floor(b + 1e-6), f = b - w; return start + (w + (Math.abs(f - 0.5) < 1e-6 ? sw : f)) * spb; };
+    for (const n of bar.notes) {
+      const t = Math.max(0, at(n.beat) + (n.roll || 0) + this.hr.f(-0.006, 0.006));
+      const dur = n.len ? Math.max(0.08, at(n.beat + n.len) - at(n.beat)) : 0;
+      if (n.inst === 'ep') this.ep(t, n.midi, n.vel, dur, T.ep, (n.midi - 62) / 40);
+      else if (n.inst === 'bass') this.bass(t, n.midi, n.vel, dur, T.bass);
+      else if (n.inst === 'vibes') this.vibes(t, n.midi, n.vel, dur, T.vibes, 0.25);
+      else if (n.inst === 'swish') this.swish(t, dur, n.vel, T.drums);
+      else if (n.inst === 'slap') this.slap(t, n.vel, T.drums);
+      else if (n.inst === 'ghost') this.ghost(t, n.vel, T.drums);
+      else if (n.inst === 'kick') this.kick(t, n.vel, T.drums);
+      else if (n.inst === 'ride') this.ride(t, n.vel);
+    }
+    this.bars = this.bars.filter(b => b.end > this.ctx.currentTime - 2);
+    this.bars.push({ start, end: start + 4 * spb, chord: bar.chord, next: bar.next });
+  }
+
+  // --- instruments ---
+  ep(t, m, vel, dur, dest, pan = 0) {               // FM electric piano with a tine ping
+    const c = this.ctx, f = mtof(m), end = t + dur, peak = 0.1 * vel;
+    const car = c.createOscillator(), mod = c.createOscillator(), idx = this.g(0), amp = this.g(0), p = this.panner();
+    car.frequency.value = f; mod.frequency.value = f;
+    idx.gain.setValueAtTime(f * 1.1 * vel * this.P.bright, t); idx.gain.setTargetAtTime(f * 0.12, t, 0.3);
+    mod.connect(idx); idx.connect(car.frequency);
+    amp.gain.setValueAtTime(0, t); amp.gain.linearRampToValueAtTime(peak, t + 0.006);
+    amp.gain.setTargetAtTime(peak * 0.05, t + 0.006, 1.2); amp.gain.setTargetAtTime(0, end, 0.09);
+    const tine = c.createOscillator(), tg = this.g(0);
+    tine.frequency.value = f * 7;
+    tg.gain.setValueAtTime(0, t); tg.gain.linearRampToValueAtTime(0.02 * vel, t + 0.002); tg.gain.setTargetAtTime(0, t + 0.002, 0.035);
+    if (p.pan) p.pan.value = clamp(pan, -1, 1);
+    car.connect(amp); amp.connect(p); tine.connect(tg); tg.connect(p); p.connect(dest);
+    for (const o of [car, mod, tine]) { o.start(t); o.stop(end + 0.7); }
+  }
+  bass(t, m, vel, dur, dest) {                      // round upright: sine + triangle, plucked filter, finger thump
+    const c = this.ctx, f = mtof(m), end = t + dur, peak = 0.27 * vel;
+    const o1 = c.createOscillator(), o2 = c.createOscillator(), g2 = this.g(0.3), lp = c.createBiquadFilter(), amp = this.g(0);
+    o1.frequency.value = f; o2.type = 'triangle'; o2.frequency.value = f;
+    for (const o of [o1, o2]) { o.detune.setValueAtTime(20, t); o.detune.linearRampToValueAtTime(0, t + 0.06); }
+    lp.type = 'lowpass'; lp.Q.value = 0.8;
+    lp.frequency.setValueAtTime(f * 7 + 300, t); lp.frequency.setTargetAtTime(f * 2.2 + 120, t, 0.12);
+    amp.gain.setValueAtTime(0, t); amp.gain.linearRampToValueAtTime(peak, t + 0.012);
+    amp.gain.setTargetAtTime(peak * 0.22, t + 0.012, 0.35); amp.gain.setTargetAtTime(0, end, 0.07);
+    o1.connect(lp); o2.connect(g2); g2.connect(lp); lp.connect(amp); amp.connect(dest);
+    const s = this.noise(t, 0.08), tl = c.createBiquadFilter(), ta = this.g(0);
+    tl.type = 'lowpass'; tl.frequency.value = 450;
+    ta.gain.setValueAtTime(0.12 * vel, t); ta.gain.setTargetAtTime(0, t, 0.018);
+    s.connect(tl); tl.connect(ta); ta.connect(dest);
+    for (const o of [o1, o2]) { o.start(t); o.stop(end + 0.5); }
+  }
+  vibes(t, m, vel, dur, dest, pan = 0) {            // vibraphone: fundamental + bright 4th partial
+    const c = this.ctx, f = mtof(m), end = t + dur, peak = 0.11 * vel;
+    const o1 = c.createOscillator(), o2 = c.createOscillator(), g2 = this.g(0), amp = this.g(0), p = this.panner();
+    o1.frequency.value = f; o2.frequency.value = f * 4;
+    amp.gain.setValueAtTime(0, t); amp.gain.linearRampToValueAtTime(peak, t + 0.003);
+    amp.gain.setTargetAtTime(0, t + 0.003, 1.1); amp.gain.setTargetAtTime(0, end, 0.25);
+    g2.gain.setValueAtTime(0, t); g2.gain.linearRampToValueAtTime(0.35, t + 0.002); g2.gain.setTargetAtTime(0, t + 0.002, 0.18);
+    if (p.pan) p.pan.value = clamp(pan, -1, 1);
+    o1.connect(amp); o2.connect(g2); g2.connect(amp); amp.connect(p); p.connect(dest);
+    for (const o of [o1, o2]) { o.start(t); o.stop(end + 1.2); }
+  }
+  hit(t, dest, gain, freq, q, decay, len) {         // filtered-noise percussion
+    const s = this.noise(t, len), f = this.ctx.createBiquadFilter(), a = this.g(0);
+    f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+    a.gain.setValueAtTime(0, t); a.gain.linearRampToValueAtTime(gain, t + 0.002); a.gain.setTargetAtTime(0, t + 0.002, decay);
+    s.connect(f); f.connect(a); a.connect(dest);
+  }
+  swish(t, dur, vel, dest) {                        // a brush circling the snare
+    const s = this.noise(t, dur + 0.1), f = this.ctx.createBiquadFilter(), a = this.g(0);
+    f.type = 'bandpass'; f.frequency.value = 2600; f.Q.value = 0.5;
+    a.gain.setValueAtTime(0, t); a.gain.linearRampToValueAtTime(0.022 * vel, t + dur * 0.4); a.gain.linearRampToValueAtTime(0, t + dur);
+    s.connect(f); f.connect(a); a.connect(dest);
+  }
+  slap(t, vel, dest) { this.hit(t, dest, 0.1 * vel, 3000, 0.8, 0.045, 0.35); }
+  ghost(t, vel, dest) { this.hit(t, dest, 0.04 * vel, 3800, 0.9, 0.025, 0.2); }
+  kick(t, vel, dest) {                              // felt beater
+    const o = this.ctx.createOscillator(), a = this.g(0);
+    o.frequency.setValueAtTime(75, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    a.gain.setValueAtTime(0, t); a.gain.linearRampToValueAtTime(0.32 * vel, t + 0.005); a.gain.setTargetAtTime(0, t + 0.005, 0.11);
+    o.connect(a); a.connect(dest); o.start(t); o.stop(t + 0.8);
+  }
+  ride(t, vel) {                                    // strike the tune's ride bank (inharmonic square waves)
+    if (!this.T.ride) return;
+    const g = this.T.ride.gain;
+    g.setTargetAtTime(0.018 * vel, t, 0.0003); g.setTargetAtTime(0, t + 0.001, 0.3);
+  }
+
+  // --- the street, heard ---
+  chordAt(t) {
+    const last = this.bars[this.bars.length - 1];
+    if (last && t >= last.end) return last.next || last.chord;
+    for (let i = this.bars.length - 1; i >= 0; i--) if (this.bars[i].start <= t) return this.bars[i].chord;
+    return this.bars.length ? this.bars[0].chord : null;
+  }
+  nextBeat(t) {
+    const b = this.bars.find(x => x.start <= t && t < x.end);
+    return b ? b.start + Math.ceil((t - b.start) / this.spb + 0.001) * this.spb : t;
+  }
+  accent(type, d, t) {
+    if (!this.T) return;
+    if (type === 'gust') this.gustSwell(t, d);
+    else if (type === 'window') this.chime(t, d);
+    else if (type === 'flicker') this.muffle(t, d.dur);
+    else if (type === 'catWalk') this.catFigure(t, d.dir);
+    else if (type === 'catSit') this.catSettle(t);
+  }
+  // A gust: wind through a sweeping band-pass, panned across with the gust front, cresting
+  // with a soft cymbal swell and a little brush flurry as it passes the middle of the street
+  gustSwell(t, d) {
+    const c = this.ctx, k = clamp(d.str / GUST_REF, 0.3, 1.3);
+    const peak = t + (W / 2 + M + 30) / d.speed + d.dur * 0.5, end = peak + d.dur * 0.9 + 0.8;
+    const s = this.noise(t, end - t + 0.1), f = c.createBiquadFilter(), a = this.g(0), p = this.panner();
+    f.type = 'bandpass'; f.Q.value = 0.8;
+    f.frequency.setValueAtTime(400, t); f.frequency.exponentialRampToValueAtTime(2200, peak); f.frequency.exponentialRampToValueAtTime(700, end);
+    a.gain.setValueAtTime(0, t); a.gain.linearRampToValueAtTime(0.06 * k, peak); a.gain.linearRampToValueAtTime(0, end);
+    if (p.pan) { p.pan.setValueAtTime(-0.75 * d.dir, t); p.pan.linearRampToValueAtTime(0.75 * d.dir, end); }
+    s.connect(f); f.connect(a); a.connect(p); p.connect(this.T.fx);
+    const s2 = this.noise(t, end - t + 1), hp = c.createBiquadFilter(), a2 = this.g(0);
+    hp.type = 'highpass'; hp.frequency.value = 6000;
+    a2.gain.setValueAtTime(0.0001, t); a2.gain.exponentialRampToValueAtTime(0.028 * k, peak); a2.gain.setTargetAtTime(0, peak, 0.7);
+    s2.connect(hp); hp.connect(a2); a2.connect(this.T.fx);
+    for (let i = 0; i < 4; i++) this.ghost(peak - 0.25 + i * 0.09, 0.5 + 0.15 * i, this.T.fx);
+  }
+  // A window: a high chord tone when a light goes on, a lower, softer one when it goes off
+  chime(t, d) {
+    const ch = this.chordAt(t);
+    if (!ch) return;
+    const lo = d.on ? 84 : 72, opts = [];
+    for (let m = lo; m < lo + 12; m++) if (ch.pcs.includes(m % 12)) opts.push(m);
+    this.vibes(t + 0.03, this.ar.pick(opts), d.on ? 0.55 : 0.3, d.on ? 2.2 : 1, this.T.fx, d.x * 1.6 - 0.8);
+  }
+  muffle(t, dur) {                                  // the lamp flickers, the room goes dim
+    const f = this.tone.frequency;
+    f.cancelScheduledValues(t); f.setTargetAtTime(1300, t, 0.02); f.setTargetAtTime(7000 * this.P.bright, t + dur, 0.12);
+  }
+  catFigure(t, dir) {                               // tiptoeing pentatonic piano notes
+    const P = this.P, b = this.nextBeat(t), notes = [];
+    for (let m = 76; m <= 91; m++) if (PENTATONIC.includes(((m - P.keyPc) % 12 + 12) % 12)) notes.push(m);
+    let i = this.ar.i(1, notes.length - 5);
+    if (dir < 0) i += 3;
+    [0, P.swing, 1, 1 + P.swing].forEach((o, k) => {
+      const tn = b + o * this.spb, ch = this.chordAt(tn + 0.001);
+      let m = notes[i + k * dir];
+      if (ch && !ch.pcs.includes(m % 12) && ch.pcs.includes((m + 11) % 12)) m -= 1;   // no half-step clashes
+      this.ep(tn, m, 0.45, 0.16, this.T.fx, dir * 0.4);
+    });
+  }
+  catSettle(t) {                                    // the cat sits: a soft falling fifth to third, within one chord
+    let b = this.nextBeat(t);
+    if (this.chordAt(b + 0.001) !== this.chordAt(b + this.spb + 0.001)) b += this.spb;
+    const ch = this.chordAt(b + 0.001);
+    if (!ch) return;
+    const from = (iv, lo) => { let m = lo; while (((m - ch.root) % 12 + 12) % 12 !== iv) m++; return m; };
+    const fi = ch.ivs.includes(6) ? 6 : 7, fifth = from(fi, 76), third = fifth - (fi - (ch.ivs.includes(3) ? 3 : 4));
+    this.ep(b, fifth, 0.35, this.spb * 0.9, this.T.fx);
+    this.ep(b + this.spb, third, 0.3, this.spb * 1.8, this.T.fx);
+  }
+}
+
+// Live playback: starts on the first tap or key press (browsers require one), schedules
+// bars a little ahead of time, and hears the street through music.event().
+const MUSIC_PREFS = 'autumn-street-music';
+const music = {
+  ctx: null, band: null, recDest: null, P: null, comp: null,
+  running: false, wanted: true, volume: CONFIG.MUSIC_VOLUME, nextBarAt: 0, greeted: false,
+  load() {
+    try {
+      const p = JSON.parse(localStorage.getItem(MUSIC_PREFS) || 'null');
+      if (p) { this.wanted = p.wanted !== false; if (typeof p.volume === 'number') this.volume = clamp(p.volume, 0, 1); }
+    } catch (_) { /* storage unavailable: defaults */ }
+  },
+  save() { try { localStorage.setItem(MUSIC_PREFS, JSON.stringify({ wanted: this.wanted, volume: this.volume })); } catch (_) { /* fine */ } },
+  setSeed(num) {
+    this.P = makeTune(num);
+    ui.musicInfo.textContent = '♪ ' + tuneLabel(this.P);
+    if (this.band) this.restart();
+  },
+  start() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) { this.wanted = false; toast('This browser cannot play the music'); return; }
+      this.ctx = new AC();
+      const out = this.ctx.createGain();
+      out.connect(this.ctx.destination);
+      if (this.ctx.createMediaStreamDestination) { this.recDest = this.ctx.createMediaStreamDestination(); out.connect(this.recDest); }
+      this.band = new Band(this.ctx, out);
+      this.restart();
+      setInterval(() => this.tick(), 100);
+    }
+    this.resume();
+    this.running = this.wanted = true;
+    this.band.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.3);
+    this.save(); this.show();
+    if (!this.greeted) {
+      this.greeted = true;
+      toast(`♪ ${tuneLabel(this.P)} · ${matchMedia('(pointer: coarse)').matches ? '⋯ → music to mute' : 'M to mute'}`);
+    }
+  },
+  resume() { const pr = this.ctx.resume(); if (pr && pr.catch) pr.catch(() => {}); },
+  stop() {
+    this.running = this.wanted = false;
+    if (this.ctx) {
+      this.band.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.08);
+      setTimeout(() => { if (!this.running && !rec) this.ctx.suspend(); }, 400);   // a recording keeps its (silent) track
+    }
+    this.save(); this.show();
+  },
+  toggle() { if (this.running) this.stop(); else this.start(); },
+  restart() {
+    this.band.newTune(this.P);
+    this.comp = makeComposer(this.P);
+    this.nextBarAt = this.ctx.currentTime + 0.25;
+    this.tick();
+  },
+  tick() {
+    if (!this.running || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime, bar = 4 * 60 / this.P.bpm;
+    if (this.nextBarAt < now) this.nextBarAt = now + 0.05;     // the page was asleep: carry on from here
+    try {
+      while (this.nextBarAt < now + 1.5) { this.band.playBar(this.comp.nextBar(), this.nextBarAt); this.nextBarAt += bar; }
+    } catch (err) { console.warn('music', err); this.nextBarAt = now + bar; }   // never let audio break the picture
+  },
+  setVolume(v) {
+    this.volume = v;
+    if (this.running) this.band.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+    this.save();
+  },
+  event(type, data) {
+    try {
+      if (this.running && !prewarming && this.ctx.state === 'running') this.band.accent(type, data, this.ctx.currentTime + 0.03);
+    } catch (err) { console.warn('music accent', err); }
+  },
+  show() { ui.musicBtn.textContent = this.running ? 'on' : 'off'; ui.musicBtn.setAttribute('aria-pressed', String(this.running)); },
+};
+document.addEventListener('visibilitychange', () => {   // fade out when the tab hides, back in when it returns
+  if (!music.ctx || !music.running) return;
+  const g = music.band.master.gain, n = music.ctx.currentTime;
+  if (document.hidden) {
+    g.cancelScheduledValues(n); g.setTargetAtTime(0, n, 0.03);
+    setTimeout(() => { if (document.hidden && music.running && !rec) music.ctx.suspend(); }, 200);
+  } else {
+    const pr = music.ctx.resume();
+    Promise.resolve(pr).then(() => {
+      const n2 = music.ctx.currentTime;
+      g.cancelScheduledValues(n2); g.setValueAtTime(0, n2); g.setTargetAtTime(music.volume, n2, 0.1);
+    }).catch(() => {});
+  }
+});
+
+/* ==========================================================================
+ * UI & INPUT
+ * ======================================================================== */
+const $ = id => document.getElementById(id);
+const ui = {
+  panel: $('ui'), seedInput: $('seedInput'), leafSlider: $('leafSlider'), leafVal: $('leafVal'),
+  windSlider: $('windSlider'), windVal: $('windVal'), recBtn: $('recBtn'), recBadge: $('recBadge'),
+  recTime: $('recTime'), toast: $('toast'), musicBtn: $('musicBtn'), volSlider: $('volSlider'), musicInfo: $('musicInfo'),
+};
+let toastTimer = 0;
+function toast(msg, ms = 3000) {
+  ui.toast.textContent = msg; ui.toast.style.opacity = 1;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { ui.toast.style.opacity = 0; }, ms);
+}
+const toggleUI = () => ui.panel.classList.toggle('hidden');
+
+function triggerGust(dir = 0) {
+  startGust(simT, 1.2, dir);
+  nextGustAt = Math.max(nextGustAt, simT + 5);
+}
+
+ui.leafSlider.min = CONFIG.LEAF_COUNT_MIN; ui.leafSlider.max = CONFIG.LEAF_COUNT_MAX; ui.leafSlider.step = 10;
+ui.leafSlider.value = targetLeaves; ui.leafVal.textContent = targetLeaves;
+ui.leafSlider.addEventListener('input', () => {
+  targetLeaves = Number(ui.leafSlider.value);
+  ui.leafVal.textContent = targetLeaves;
+  // New leaves start above the frame so they drift in; surplus ones retire as they land
+  while (leaves.length < targetLeaves) {
+    const p = makeLeaf(); respawn(p, simT); p.y = rt.f(-H * 0.6, -3); leaves.push(p);
+  }
+});
+ui.windSlider.value = windStrength; ui.windVal.textContent = windStrength.toFixed(2);
+ui.windSlider.addEventListener('input', () => {
+  windStrength = Number(ui.windSlider.value);
+  ui.windVal.textContent = windStrength.toFixed(2);
+});
+$('newSeedBtn').addEventListener('click', () => setSeed(randomSeed()));
+// Type a seed (number or any word) and press Enter / go to rebuild that street
+$('seedForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = ui.seedInput.value.trim();
+  if (!v) { toast('Enter a seed: a number or any word'); return; }
+  setSeed(v);
+  ui.seedInput.blur();
+  toast('Street rebuilt from seed ' + v);
+});
+$('gustBtn').addEventListener('click', () => triggerGust());
+ui.recBtn.addEventListener('click', startRecording);
+ui.recBtn.hidden = !CONFIG.CAN_DOWNLOAD;
+$('uiToggle').addEventListener('click', toggleUI);
+music.load();
+ui.volSlider.value = music.volume;
+ui.volSlider.addEventListener('input', () => music.setVolume(Number(ui.volSlider.value)));
+ui.musicBtn.addEventListener('click', () => music.toggle());
+// Browsers only allow sound after the viewer interacts: the first tap or key starts the music
+const firstGesture = e => {
+  if (!music.wanted || (e.target.closest && e.target.closest('#musicBtn'))) return;
+  if (!music.running) music.start();
+  else if (music.ctx && music.ctx.state !== 'running' && !document.hidden) music.resume();   // e.g. a touch that didn't count
+};
+for (const n of ['pointerdown', 'pointerup', 'touchend', 'click']) window.addEventListener(n, firstGesture, true);
+
+// Tap / click anywhere outside the controls: a gust blowing away from the tap
+window.addEventListener('pointerdown', e => {
+  if (e.target.closest('#ui, #uiToggle')) return;
+  triggerGust(e.clientX < window.innerWidth / 2 ? 1 : -1);
+});
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.matches && e.target.matches('input[type=text]')) return;   // typing a seed
+  const k = e.key.toLowerCase();
+  if (k === ' ' && e.target.closest && e.target.closest('button, input')) return;   // Space presses buttons
+  if (k === 'm') { music.toggle(); return; }
+  firstGesture(e);
+  if (k === 'h') toggleUI();
+  else if (k === 'r') setSeed(randomSeed());
+  else if (k === 'v') startRecording();
+  else if (k === 'g' || k === ' ') { triggerGust(); e.preventDefault(); }
+});
+
+/* ==========================================================================
+ * MAIN LOOP
+ * ======================================================================== */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now;
+  simT += dt;
+  update(dt, simT);
+  render(simT);
+  vctx.drawImage(buf, 0, 0, view.width, view.height);
+  if (rec) recordFrame(now);
+  requestAnimationFrame(frame);
+}
+
+resize();
+setSeed(URL_SEED || randomSeed());
+music.show();
+toast(matchMedia('(pointer: coarse)').matches ? 'tap for a gust and music · ⋯ for controls' : 'click for a gust and music · H for controls', 4000);
+requestAnimationFrame(t => { last = t; frame(t); });
+})();
+</script>
+</body>
+</html>
