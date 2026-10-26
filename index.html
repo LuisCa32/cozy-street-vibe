@@ -2021,6 +2021,72 @@ class Band {
 
 // Live playback: starts on the first tap or key press (browsers require one), schedules
 // bars a little ahead of time, and hears the street through music.event().
+// iPhone / iPad silent switch. Safari plays Web Audio in the "ambient" audio session, which the
+// Ring/Silent switch mutes. While the music is on, ask for the "playback" session music apps use:
+//   - iOS 16.4+: navigator.audioSession.type = 'playback'
+//   - older iOS (or a frame that ignores it): a looping, inaudible <audio>, which makes WebKit pick
+//     the same session. Generated here as a WAV, so the page still ships no audio files.
+// Released when the music is muted or the page is hidden. Nothing changes on other platforms.
+// Like any music app, starting the music pauses other audio (Music, Spotify, podcasts).
+const silentSwitch = (() => {
+  const ua = navigator.userAgent;
+  // iPadOS reports a Mac user agent; WebKit gives maxTouchPoints 5 on iOS and 0 on macOS
+  const isIOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 0);
+  const session = isIOS && 'audioSession' in navigator ? navigator.audioSession : null;
+  let viaSession = false, wanted = false, el = null, wavRate = 0, wavURI = '';
+
+  function setType(type) {
+    if (!session) return false;
+    try { session.type = type; } catch (_) { return false; }
+    return session.type === type;               // a frame without microphone permission ignores the setter
+  }
+  // 0.5 s of 8-bit mono silence at the context's own rate (a file at another rate can change the
+  // context's rate); under 0.95 s it stays out of Now Playing on iOS 17.2+
+  function silentWav(rate) {
+    if (rate === wavRate) return wavURI;
+    const n = Math.round(rate / 2), len = 44 + n + (n & 1), b = new Uint8Array(len), v = new DataView(b.buffer);
+    const tag = (o, x) => { for (let i = 0; i < 4; i++) b[o + i] = x.charCodeAt(i); };
+    tag(0, 'RIFF'); v.setUint32(4, len - 8, true); tag(8, 'WAVE'); tag(12, 'fmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+    v.setUint16(32, 1, true); v.setUint16(34, 8, true); tag(36, 'data'); v.setUint32(40, n, true);
+    b.fill(0x80, 44, 44 + n);                   // 8-bit silence is 0x80
+    let str = '';
+    for (let i = 0; i < len; i += 0x8000) str += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+    wavRate = rate;
+    return (wavURI = 'data:audio/wav;base64,' + btoa(str));
+  }
+  function dropEl() {
+    if (!el) return;
+    const e = el; el = null;
+    e.pause(); e.src = 'about:blank'; e.load();
+  }
+  return {
+    // In the tap or key handler that turns the music on, before the context starts
+    claim() { wanted = true; viaSession = setType('playback'); },
+    // Older iOS only; play() needs a tap or key press, so this is safe to call on every one
+    fallback(ctx) {
+      if (!isIOS || viaSession || !wanted || !ctx) return;
+      if (!el) {
+        el = document.createElement('audio');
+        el.setAttribute('x-webkit-airplay', 'deny');
+        try { el.disableRemotePlayback = true; } catch (_) { /* older WebKit */ }
+        el.preload = 'auto'; el.loop = true; el.src = silentWav(ctx.sampleRate); el.load();
+      }
+      el.muted = false;                         // a muted element does not count as playback
+      if (!el.paused) return;
+      const mine = el, pr = mine.play();
+      if (pr && pr.catch) pr.catch(() => { if (el === mine && mine.paused) dropEl(); });   // retried on the next tap
+    },
+    // Music muted or page hidden: back to the default session, which obeys the switch again
+    release() {
+      wanted = false;
+      if (session) setType('auto');
+      viaSession = false;
+      if (el) { el.pause(); el.muted = true; }  // pausing alone is not enough for WebKit
+    },
+  };
+})();
+
 const MUSIC_PREFS = 'autumn-street-music';
 const music = {
   ctx: null, band: null, recDest: null, P: null, comp: null,
@@ -2038,9 +2104,10 @@ const music = {
     if (this.band) this.restart();
   },
   start() {
+    silentSwitch.claim();                       // iOS: play even with the silent switch on
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) { this.wanted = false; toast('This browser cannot play the music'); return; }
+      if (!AC) { silentSwitch.release(); this.wanted = false; toast('This browser cannot play the music'); return; }
       this.ctx = new AC();
       const out = this.ctx.createGain();
       out.connect(this.ctx.destination);
@@ -2048,7 +2115,11 @@ const music = {
       this.band = new Band(this.ctx, out);
       this.restart();
       setInterval(() => this.tick(), 100);
+      if ('mediaSession' in navigator && window.MediaMetadata) {   // the title iOS shows in Now Playing
+        try { navigator.mediaSession.metadata = new MediaMetadata({ title: 'Cozy Street Vibe' }); } catch (_) { /* fine */ }
+      }
     }
+    silentSwitch.fallback(this.ctx);
     this.resume();
     this.running = this.wanted = true;
     this.band.master.gain.setTargetAtTime(this.volume, this.ctx.currentTime, 0.3);
@@ -2063,7 +2134,11 @@ const music = {
     this.running = this.wanted = false;
     if (this.ctx) {
       this.band.master.gain.setTargetAtTime(0, this.ctx.currentTime, 0.08);
-      setTimeout(() => { if (!this.running && !rec) this.ctx.suspend(); }, 400);   // a recording keeps its (silent) track
+      setTimeout(() => {
+        if (this.running) return;
+        if (!rec) this.ctx.suspend();           // a recording keeps its (silent) track
+        silentSwitch.release();                 // hand the audio back, so other apps can play again
+      }, 400);
     }
     this.save(); this.show();
   },
@@ -2099,8 +2174,14 @@ document.addEventListener('visibilitychange', () => {   // fade out when the tab
   const g = music.band.master.gain, n = music.ctx.currentTime;
   if (document.hidden) {
     g.cancelScheduledValues(n); g.setTargetAtTime(0, n, 0.03);
-    setTimeout(() => { if (document.hidden && music.running && !rec) music.ctx.suspend(); }, 200);
+    setTimeout(() => {
+      if (!document.hidden || !music.running) return;
+      if (!rec) music.ctx.suspend();
+      silentSwitch.release();
+    }, 200);
   } else {
+    silentSwitch.claim();
+    silentSwitch.fallback(music.ctx);           // older iOS may need the next tap for this
     const pr = music.ctx.resume();
     Promise.resolve(pr).then(() => {
       const n2 = music.ctx.currentTime;
@@ -2180,8 +2261,9 @@ ui.musicBtn.addEventListener('click', () => music.toggle());
 // Browsers only allow sound after the viewer interacts: the first tap or key starts the music
 const firstGesture = e => {
   if (!music.wanted || (e.target.closest && e.target.closest('#musicBtn'))) return;
-  if (!music.running) music.start();
-  else if (music.ctx && music.ctx.state !== 'running' && !document.hidden) music.resume();   // e.g. a touch that didn't count
+  if (!music.running) { music.start(); return; }
+  silentSwitch.fallback(music.ctx);             // older iOS: (re)start the inaudible loop from this tap
+  if (music.ctx && music.ctx.state !== 'running' && !document.hidden) music.resume();   // e.g. a touch that didn't count
 };
 for (const n of ['pointerdown', 'pointerup', 'touchend', 'click']) window.addEventListener(n, firstGesture, true);
 

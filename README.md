@@ -89,6 +89,6 @@ The chord progressions, keys and piano rhythms live in `PROGRESSIONS`, `KEYS` an
 
 ## Browser notes
 
-- On iPhone the ring/silent switch can mute web audio.
+- On iPhone and iPad (iOS 16.4 or newer, in any browser) the music plays even with the silent switch on, the way a music app does. Because of that, starting it pauses other audio such as Spotify or a podcast, and muting it doesn't restart that app. Older iOS versions use a fallback and may need another tap after a phone call or an app switch.
 - Safari records `.mp4` instead of `.webm`.
 - Keep the tab in the foreground while recording.
